@@ -67,7 +67,7 @@ export default decorate([
       formattedLog: (_, { log }) => JSON.stringify(log, null, 2),
       jobFailed: (_, { log = {} }) =>
         log.status !== 'success' && log.status !== 'pending',
-      reportBugProps: ({ formattedLog }, { log = {} }) => {
+      reportBugProps: ({ formattedLog }, { log = {}, jobs }) => {
         const props = {
           size: 'small',
           title: 'Backup job failed',
@@ -75,12 +75,20 @@ export default decorate([
         if (currentPlan === XOA_PLAN_SOURCES) {
           props.message = `\`\`\`json\n${formattedLog}\n\`\`\``
         } else {
+          const formattedDate = ifDef(log.start, formatDate)
           props.files = [
             {
               content: createBinaryFile(formattedLog),
-              name: `${ifDef(log.start, formatDate)} - backup.log`,
+              name: `${formattedDate} - backup.log`,
             },
           ]
+          const job = jobs[log.jobId]
+          if (job !== undefined) {
+            props.files.push({
+              content: createBinaryFile(JSON.stringify(job, null, 2)),
+              name: `${formattedDate} - backup.config`,
+            })
+          }
         }
         return props
       },
