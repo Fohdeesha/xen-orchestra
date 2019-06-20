@@ -79,14 +79,14 @@ export default decorate([
           props.files = [
             {
               content: createBinaryFile(formattedLog),
-              name: `${formattedDate} - backup.log`,
+              name: `${formattedDate} - log.json`,
             },
           ]
           const job = jobs[log.jobId]
           if (job !== undefined) {
             props.files.push({
               content: createBinaryFile(JSON.stringify(job, null, 2)),
-              name: `${formattedDate} - backup.config`,
+              name: 'job.json',
             })
           }
         }
