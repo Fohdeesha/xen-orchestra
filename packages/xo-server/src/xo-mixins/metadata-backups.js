@@ -37,6 +37,7 @@ type Settings = {|
 type MetadataBackupJob = {
   ...$Exact<Job>,
   pools?: SimpleIdPattern,
+  proxy?: 'string',
   remotes: SimpleIdPattern,
   settings: $Dict<Settings>,
   type: METADATA_BACKUP_JOB_TYPE,
@@ -204,7 +205,9 @@ export default class metadataBackup {
 
       await asyncMap(handlers, async (handler, remoteId) => {
         const subTaskId = logger.notice(
-          `Starting XO metadata backup for the remote (${remoteId}). (${job.id})`,
+          `Starting XO metadata backup for the remote (${remoteId}). (${
+            job.id
+          })`,
           {
             data: {
               id: remoteId,
@@ -242,7 +245,9 @@ export default class metadataBackup {
           )
 
           logger.notice(
-            `Backuping XO metadata for the remote (${remoteId}) is a success. (${job.id})`,
+            `Backuping XO metadata for the remote (${remoteId}) is a success. (${
+              job.id
+            })`,
             {
               event: 'task.end',
               status: 'success',
@@ -261,7 +266,9 @@ export default class metadataBackup {
           })
 
           logger.error(
-            `Backuping XO metadata for the remote (${remoteId}) has failed. (${job.id})`,
+            `Backuping XO metadata for the remote (${remoteId}) has failed. (${
+              job.id
+            })`,
             {
               event: 'task.end',
               result: serializeError(error),
@@ -334,7 +341,9 @@ export default class metadataBackup {
 
       await asyncMap(handlers, async (handler, remoteId) => {
         const subTaskId = logger.notice(
-          `Starting metadata backup for the pool (${poolId}) for the remote (${remoteId}). (${job.id})`,
+          `Starting metadata backup for the pool (${poolId}) for the remote (${remoteId}). (${
+            job.id
+          })`,
           {
             data: {
               id: remoteId,
@@ -384,7 +393,9 @@ export default class metadataBackup {
           )
 
           logger.notice(
-            `Backuping pool metadata (${poolId}) for the remote (${remoteId}) is a success. (${job.id})`,
+            `Backuping pool metadata (${poolId}) for the remote (${remoteId}) is a success. (${
+              job.id
+            })`,
             {
               event: 'task.end',
               status: 'success',
@@ -406,7 +417,9 @@ export default class metadataBackup {
           })
 
           logger.error(
-            `Backuping pool metadata (${poolId}) for the remote (${remoteId}) has failed. (${job.id})`,
+            `Backuping pool metadata (${poolId}) for the remote (${remoteId}) has failed. (${
+              job.id
+            })`,
             {
               event: 'task.end',
               result: serializeError(error),
