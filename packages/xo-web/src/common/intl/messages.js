@@ -1147,6 +1147,8 @@ const messages = {
   vmCoresPerSocket:
     '{nSockets, number} socket{nSockets, plural, one {} other {s}} with {nCores, number} core{nCores, plural, one {} other {s}} per socket',
   vmCoresPerSocketNone: 'None',
+  vmCoresPerSocketInvalidValue:
+    'Incompatible with VM CPUs',
   vmCoresPerSocketIncorrectValue: 'Incorrect cores per socket value',
   vmCoresPerSocketIncorrectValueSolution:
     'Please change the selected value to fix it.',
