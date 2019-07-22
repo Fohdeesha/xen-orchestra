@@ -288,7 +288,10 @@ export default {
 
     coresPerSocket: {
       set: (coresPerSocket, vm) =>
-        vm.update_platform('cores-per-socket', String(coresPerSocket)),
+        vm.update_platform(
+          'cores-per-socket',
+          coresPerSocket !== null ? String(coresPerSocket) : null
+        ),
     },
 
     CPUs: 'cpus',

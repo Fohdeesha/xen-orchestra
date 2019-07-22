@@ -330,7 +330,7 @@ export default class NewVm extends BaseComponent {
   _reset = () => {
     this._replaceState({
       bootAfterCreate: true,
-      coresPerSocket: '',
+      coresPerSocket: 0,
       cpuCap: '',
       CPUs: '',
       cpuWeight: '',
@@ -486,7 +486,8 @@ export default class NewVm extends BaseComponent {
       VIFs: _VIFs,
       resourceSet: resourceSet && resourceSet.id,
       // vm.set parameters
-      coresPerSocket: state.coresPerSocket,
+      coresPerSocket:
+        state.coresPerSocket === 0 ? undefined : state.coresPerSocket,
       CPUs: state.CPUs,
       cpuWeight: state.cpuWeight === '' ? null : state.cpuWeight,
       cpuCap: state.cpuCap === '' ? null : state.cpuCap,
@@ -1049,6 +1050,7 @@ export default class NewVm extends BaseComponent {
       memoryDynamicMax,
       template,
     } = this.state.state
+    const { pool } = this.props
     const memoryThreshold = get(() => template.memory.static[0])
 
     return (
@@ -1083,14 +1085,13 @@ export default class NewVm extends BaseComponent {
               </Tooltip>
             )}
           </Item>
-          {this.props.pool !== undefined && (
+          {pool !== undefined && (
             <Item label={_('vmCpuTopology')}>
               <SelectCoresPerSocket
-                maxCores={this.props.pool.cpus.cores}
+                maxCores={pool.cpus.cores}
                 maxVcpus={get(() => template.CPUs.max)}
                 onChange={this._linkState('coresPerSocket')}
                 value={coresPerSocket}
-                vCpus={CPUs}
               />
             </Item>
           )}

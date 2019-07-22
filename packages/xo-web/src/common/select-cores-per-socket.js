@@ -12,47 +12,46 @@ const PROP_TYPES = {
   maxCores: PropTypes.number,
   maxVcpus: PropTypes.number,
   onChange: PropTypes.func.isRequired,
-  value: PropTypes.string.isRequired,
-  vCpus: PropTypes.number,
+  value: PropTypes.number.isRequired,
 }
 
+// https://github.com/xcp-ng/xenadmin/blob/0160cd0119fae3b871eef656c23e2b76fcc04cb5/XenModel/XenAPI-Extensions/VM.cs#L62
+const MAX_VM_SOCKETS = 16
+
+// This algorithm is inspired from: https://github.com/xcp-ng/xenadmin/blob/master/XenAdmin/Controls/ComboBoxes/CPUTopologyComboBox.cs#L116
 const SelectCoresPerSocket = decorate([
   provideState({
     computed: {
-      options: (state, { maxCores, maxVcpus, value, vCpus }) => {
+      options: (state, { maxCores, maxVcpus, value }) => {
         const options = [
           {
             label: _('vmChooseCoresPerSocket'),
-            value: '',
+            value: 0,
           },
         ]
 
-        if (
-          maxCores === undefined ||
-          maxVcpus === undefined ||
-          vCpus === undefined
-        ) {
+        if (maxCores === undefined || maxVcpus === undefined) {
           return options
         }
 
-        const ratio = vCpus / maxVcpus
+        const ratio = maxVcpus / MAX_VM_SOCKETS
 
-        let isSelectedValueInOptions = value === ''
+        let isSelectedValueInOptions = value === 0
         for (
           let coresPerSocket = maxCores;
           coresPerSocket >= ratio;
           coresPerSocket--
         ) {
-          if (vCpus % coresPerSocket === 0) {
+          if (maxVcpus % coresPerSocket === 0) {
             options.push({
               label: _('vmCoresPerSocket', {
-                nSockets: vCpus / coresPerSocket,
+                nSockets: maxVcpus / coresPerSocket,
                 nCores: coresPerSocket,
               }),
-              value: String(coresPerSocket),
+              value: coresPerSocket,
             })
             if (!isSelectedValueInOptions) {
-              isSelectedValueInOptions = coresPerSocket === +value
+              isSelectedValueInOptions = coresPerSocket === value
             }
           }
         }
@@ -61,13 +60,14 @@ const SelectCoresPerSocket = decorate([
           options.push({
             label: (
               <span>
-                {_('vmCoresPerSocket', {
-                  nSockets: vCpus / +value,
-                  nCores: +value,
+                {_('vmCoresPerSocketInvalidValue', {
+                  nCores: value,
                 })}{' '}
-                (<span className='text-danger'>
-                  <Icon icon='error' /> {_('vmCoresPerSocketInvalidValue')}
-                </span>)
+                (
+                <span className='text-danger'>
+                  <Icon icon='error' /> {_('vmCoresPerSocketNotDivisor')}
+                </span>
+                )
               </span>
             ),
             value,
@@ -75,7 +75,7 @@ const SelectCoresPerSocket = decorate([
         }
         return options
       },
-      selectProps: (_, { props }) => omit(props, Object.keys(PROP_TYPES)),
+      selectProps: (_, props) => omit(props, Object.keys(PROP_TYPES)),
     },
   }),
   injectState,
