@@ -148,6 +148,7 @@ const messages = {
   customJob: 'Custom Job',
   userPage: 'User',
   xoa: 'XOA',
+  hubPage: 'Hub',
 
   // ----- Support -----
   noSupport: 'No support',
@@ -226,6 +227,11 @@ const messages = {
   // ----- Home snapshots -----
   snapshotVmsName: 'Name',
   snapshotVmsDescription: 'Description',
+
+  // ----- Catalog view ------
+  catalogSortBy: 'Sort by',
+  catalogSortByName: 'Name',
+  catalogSortByPopularity: 'Popularity',
 
   // ----- Common components -----
   sortedTableAllItemsSelected: 'All of them are selected',
