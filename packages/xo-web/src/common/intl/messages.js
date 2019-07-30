@@ -228,10 +228,11 @@ const messages = {
   snapshotVmsName: 'Name',
   snapshotVmsDescription: 'Description',
 
-  // ----- Catalog view ------
-  catalogSortBy: 'Sort by',
-  catalogSortByName: 'Name',
-  catalogSortByPopularity: 'Popularity',
+  // ----- Hub view ------
+  hubSortBy: 'Sort by',
+  hubSortByName: 'Name',
+  hubSortByPopularity: 'Popularity',
+  hubResourceAlert: 'Resource alert',
 
   // ----- Common components -----
   sortedTableAllItemsSelected: 'All of them are selected',
