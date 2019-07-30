@@ -1052,6 +1052,15 @@ export default class NewVm extends BaseComponent {
     } = this.state.state
     const { pool } = this.props
     const memoryThreshold = get(() => template.memory.static[0])
+    const selectCoresPerSocket = (
+      <SelectCoresPerSocket
+        disabled={pool === undefined}
+        maxCores={get(() => pool.cpus.cores)}
+        maxVcpus={get(() => template.CPUs.max)}
+        onChange={this._linkState('coresPerSocket')}
+        value={coresPerSocket}
+      />
+    )
 
     return (
       <Section
@@ -1085,16 +1094,15 @@ export default class NewVm extends BaseComponent {
               </Tooltip>
             )}
           </Item>
-          {pool !== undefined && (
-            <Item label={_('vmCpuTopology')}>
-              <SelectCoresPerSocket
-                maxCores={pool.cpus.cores}
-                maxVcpus={get(() => template.CPUs.max)}
-                onChange={this._linkState('coresPerSocket')}
-                value={coresPerSocket}
-              />
-            </Item>
-          )}
+          <Item label={_('vmCpuTopology')}>
+            {pool !== undefined ? (
+              selectCoresPerSocket
+            ) : (
+              <Tooltip content={_('requiresAdminPermissions')}>
+                {selectCoresPerSocket}
+              </Tooltip>
+            )}
+          </Item>
         </SectionContent>
       </Section>
     )
