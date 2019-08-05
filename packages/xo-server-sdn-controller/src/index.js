@@ -143,7 +143,7 @@ class SDNController extends EventEmitter {
     }
   }
 
-  load() {
+  async load() {
     // Exposte method to create pool-wide private network
     const createPrivateNetwork = this._createPrivateNetwork.bind(this)
     createPrivateNetwork.description =
@@ -196,10 +196,18 @@ class SDNController extends EventEmitter {
       )
     )
 
+    const poolIds = []
+    const pifIds = []
     // FIXME: we should monitor when xapis are added/removed
-    return Promise.all(
-      map(this._xo.getAllXapis(), async xapi => {
+    this._xapis = this._xo.getAllXapis()
+    await Promise.all(
+      map(this._xapis, async xapi => {
         await xapi.objectsFetched
+
+        poolIds.push(xapi.pool.$id)
+        pifIds.push(
+          find(xapi.pool.$master.$PIFs, pif => pif.device === 'eth0').$id
+        )
         if (this._setControllerNeeded(xapi)) {
           return
         }
@@ -249,6 +257,17 @@ class SDNController extends EventEmitter {
         )
       })
     )
+
+    // TODO: Remove me when UI allows
+    log.debug('Creating cross pool network')
+    await this._createCrossPoolPrivateNetwork({
+      xoPoolIds: poolIds,
+      networkName: 'cross pool',
+      networkDescription: 'cross pool private network',
+      encapsulation: 'gre',
+      xoPifIds: pifIds,
+    })
+    log.debug('Cross pool network created')
   }
 
   async unload() {
@@ -357,23 +376,13 @@ class SDNController extends EventEmitter {
 
       crossPoolNetwork.pools.push(poolNetwork.pool)
       crossPoolNetwork.networks.push(poolNetwork.network)
-      if (
-        crossPoolNetwork.poolCenter === undefined &&
-        poolNetwork.starCenter !== undefined
-      ) {
-        crossPoolNetwork.poolCenter = pool.$ref
-        log.debug('New pool center', {
-          network: networkName,
-          poolCenter: pool.name_label,
-        })
-      }
-
       log.debug('Pool added to cross pool network', {
         network: networkName,
         pool: pool.name_label,
       })
     }
 
+    this._electNewPoolCenter(crossPoolNetwork)
     this._crossPoolNetworks.push(crossPoolNetwork)
   }
 
@@ -664,6 +673,37 @@ class SDNController extends EventEmitter {
 
   // ---------------------------------------------------------------------------
 
+  async _electNewPoolCenter(crossPoolNetwork) {
+    for (const poolRef of crossPoolNetwork.pools) {
+      const xapi = find(this._xapis, xapi => xapi.pool.$ref === poolRef)
+      const poolNetwork = this._getPoolNetwork(poolRef, crossPoolNetwork)
+      const pool = xapi.getObjectByRef(poolRef)
+      const network = xapi.getObjectByRef(poolNetwork.network)
+      if (poolNetwork.starCenter !== undefined) {
+        crossPoolNetwork.poolCenter = pool.$ref
+        log.debug('New pool center', {
+          network: network.name_label,
+          poolCenter: pool.name_label,
+        })
+        break
+      }
+    }
+
+    for (const poolRef of crossPoolNetwork.pools) {
+      if (poolRef === crossPoolNetwork.poolCenter) {
+        continue
+      }
+
+      const poolNetwork = this._getPoolNetwork(poolRef, crossPoolNetwork)
+      const centerPoolNetwork = this._getPoolNetwork(
+        crossPoolNetwork.poolCenter,
+        crossPoolNetwork
+      )
+
+      await this._connectNetworks(poolNetwork, centerPoolNetwork)
+    }
+  }
+
   async _electNewCenter(network, resetNeeded) {
     const pool = network.$pool
 
@@ -755,6 +795,55 @@ class SDNController extends EventEmitter {
       network: network.name_label,
       host: host.name_label,
       pool: host.$pool.name_label,
+    })
+  }
+
+  async _connectNetworks(poolNetwork, centerPoolNetwork) {
+    // TODO: see if possible to use tunnel status.
+    const client = find(
+      this._ovsdbClients,
+      client => client.host.$ref === poolNetwork.starCenter
+    )
+
+    const centerClient = find(
+      this._ovsdbClients,
+      client => client.host.$ref === centerPoolNetwork.starCenter
+    )
+
+    const centerNetwork = centerClient.host.$xapi.getObjectByRef(
+      centerPoolNetwork.network
+    )
+    const network = client.host.$xapi.getObjectByRef(poolNetwork.network)
+    const encapsulation = network.other_config.encapsulation || 'gre'
+    try {
+      await client.addInterfaceAndPort(
+        network.uuid,
+        network.name_label,
+        centerClient.host.address,
+        encapsulation
+      )
+      await centerClient.addInterfaceAndPort(
+        centerNetwork.uuid,
+        centerNetwork.name_label,
+        client.host.address,
+        encapsulation
+      )
+    } catch (error) {
+      log.error('Error while connecting networks', {
+        error,
+        network: network.name_label,
+        host: client.host.name_label,
+        centerHost: centerClient.host.name_label,
+        pool: client.host.$pool.name_label,
+        centerPool: centerClient.host.$pool.name_label,
+      })
+    }
+    log.debug('Networks connected', {
+      network: network.name_label,
+      host: client.host.name_label,
+      centerHost: centerClient.host.name_label,
+      pool: client.host.$pool.name_label,
+      centerPool: centerClient.host.$pool.name_label,
     })
   }
 
@@ -898,6 +987,24 @@ class SDNController extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+
+  _getPoolNetwork(poolRef, crossPoolNetwork) {
+    const xapi = find(this._xapis, xapi => xapi.pool.$ref === poolRef)
+    const networkRef = find(crossPoolNetwork.networks, networkRef => {
+      try {
+        const network = xapi.getObjectByRef(networkRef)
+        return network.$pool.$ref === poolRef
+      } catch (error) {
+        return false
+      }
+    })
+
+    const poolNetwork = find(this._poolNetworks, {
+      pool: poolRef,
+      network: networkRef,
+    })
+    return poolNetwork
+  }
 
   _getHostTunnelForNetwork(host, networkRef) {
     const pif = find(host.$PIFs, { network: networkRef })
