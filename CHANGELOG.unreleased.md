@@ -21,6 +21,7 @@
 - [SR/General] Display VDI VM name in SR usage graph (PR [#4370](https://github.com/vatesfr/xen-orchestra/pull/4370))
 - [SDN Controller] Add new hosts to pool's private networks (PR [#4382](https://github.com/vatesfr/xen-orchestra/pull/4382))
 - [VM/Attach disk] Fix checking VDI mode (PR [#4373](https://github.com/vatesfr/xen-orchestra/pull/4373))
+- [PBD] Obfuscate cifs password from device config [#4384](https://github.com/vatesfr/xen-orchestra/issues/4384) (PR [#4401](https://github.com/vatesfr/xen-orchestra/pull/4401))
 
 ### Released packages
 
