@@ -1,6 +1,7 @@
 import assert from 'assert'
 import createLogger from '@xen-orchestra/log'
 import NodeOpenssl from 'node-openssl-cert'
+import uuidv4 from 'uuid/v4'
 import { access, constants, readFile, writeFile } from 'fs'
 import { EventEmitter } from 'events'
 import { filter, find, forEach, map } from 'lodash'
@@ -253,11 +254,40 @@ class SDNController extends EventEmitter {
             if (center !== undefined) {
               this._starCenters.set(center.$id, center.$ref)
             }
+
+            const uuid = network.other_config.cross_pool_network_uuid
+            if (uuid !== undefined) {
+              let crossPoolNetwork = find(this._crossPoolNetworks, {
+                uuid: uuid,
+              })
+              if (crossPoolNetwork === undefined) {
+                crossPoolNetwork = {
+                  pools: [],
+                  networks: [],
+                  uuid,
+                }
+                log.debug('Adding cross-pool network', { uuid })
+                this._crossPoolNetworks.push(crossPoolNetwork)
+              }
+
+              crossPoolNetwork.pools.push(network.$pool.$ref)
+              crossPoolNetwork.networks.push(network.$ref)
+              log.debug('Pool network added to cross-pool network', {
+                network: network.name_label,
+                pool: network.$pool.name_label,
+                uuid,
+              })
+            }
           })
         )
       })
     )
 
+    for (const crossPoolNetwork of this._crossPoolNetworks) {
+      this._electNewPoolCenter(crossPoolNetwork)
+    }
+
+    /*
     // TODO: Remove me when UI allows
     log.debug('Creating cross pool network')
     await this._createCrossPoolPrivateNetwork({
@@ -268,6 +298,7 @@ class SDNController extends EventEmitter {
       xoPifIds: pifIds,
     })
     log.debug('Cross pool network created')
+*/
   }
 
   async unload() {
@@ -351,10 +382,18 @@ class SDNController extends EventEmitter {
     encapsulation,
     xoPifIds,
   }) {
+    let uuid
+    do {
+      uuid = uuidv4()
+    } while (find(this._crossPoolNetworks, { uuid: uuid }) !== undefined)
+
     const crossPoolNetwork = {
       pools: [],
       networks: [],
+      uuid,
     }
+
+    log.debug('New cross-pool network created', { uuid })
 
     for (const xoPoolId of xoPoolIds) {
       const xoPool = this._xo.getObject(xoPoolId, 'pool')
@@ -374,11 +413,19 @@ class SDNController extends EventEmitter {
         xoPif,
       })
 
+      await pool.$xapi.call(
+        'network.add_to_other_config',
+        poolNetwork.network,
+        'cross_pool_network_uuid',
+        uuid
+      )
+
       crossPoolNetwork.pools.push(poolNetwork.pool)
       crossPoolNetwork.networks.push(poolNetwork.network)
-      log.debug('Pool added to cross pool network', {
+      log.debug('Pool network added to cross-pool network', {
         network: networkName,
         pool: pool.name_label,
+        uuid,
       })
     }
 
@@ -681,9 +728,10 @@ class SDNController extends EventEmitter {
       const network = xapi.getObjectByRef(poolNetwork.network)
       if (poolNetwork.starCenter !== undefined) {
         crossPoolNetwork.poolCenter = pool.$ref
-        log.debug('New pool center', {
+        log.debug('New pool center in cross-pool network', {
           network: network.name_label,
           poolCenter: pool.name_label,
+          uuid: crossPoolNetwork.uuid,
         })
         break
       }
@@ -700,7 +748,11 @@ class SDNController extends EventEmitter {
         crossPoolNetwork
       )
 
-      await this._connectNetworks(poolNetwork, centerPoolNetwork)
+      await this._connectNetworks(
+        poolNetwork,
+        centerPoolNetwork,
+        crossPoolNetwork.uuid
+      )
     }
   }
 
@@ -752,7 +804,7 @@ class SDNController extends EventEmitter {
         pool: network.$pool.name_label,
       })
 
-      // Re-elect a cross pool center if needed
+      // Re-elect a cross-pool center if needed
       if (
         crossPoolNetwork !== undefined &&
         crossPoolNetwork.poolCenter === network.$pool.$ref
@@ -779,7 +831,7 @@ class SDNController extends EventEmitter {
       pool: network.$pool.name_label,
     })
 
-    // If the network is cross pool: reconnect to other networks
+    // If the network is cross-pool: reconnect to other networks
     if (crossPoolNetwork !== undefined) {
       const centerPoolNetwork = this._getPoolNetwork(
         crossPoolNetwork.poolCenter,
@@ -792,7 +844,11 @@ class SDNController extends EventEmitter {
             continue
           }
           const poolNetwork = this._getPoolNetwork(poolRef, crossPoolNetwork)
-          await this._connectNetworks(poolNetwork, centerPoolNetwork)
+          await this._connectNetworks(
+            poolNetwork,
+            centerPoolNetwork,
+            crossPoolNetwork.uuid
+          )
         }
       } else {
         const poolNetwork = this._getPoolNetwork(
@@ -800,7 +856,11 @@ class SDNController extends EventEmitter {
           crossPoolNetwork
         )
         poolNetwork.starCenter = newCenter.$ref
-        await this._connectNetworks(poolNetwork, centerPoolNetwork)
+        await this._connectNetworks(
+          poolNetwork,
+          centerPoolNetwork,
+          crossPoolNetwork.uuid
+        )
       }
     }
 
@@ -840,7 +900,7 @@ class SDNController extends EventEmitter {
     })
   }
 
-  async _connectNetworks(poolNetwork, centerPoolNetwork) {
+  async _connectNetworks(poolNetwork, centerPoolNetwork, uuid) {
     // TODO: see if possible to use tunnel status.
     const client = find(
       this._ovsdbClients,
@@ -878,17 +938,19 @@ class SDNController extends EventEmitter {
         error,
         network: network.name_label,
         host: client.host.name_label,
-        centerHost: centerClient.host.name_label,
         pool: client.host.$pool.name_label,
+        centerHost: centerClient.host.name_label,
         centerPool: centerClient.host.$pool.name_label,
+        uuid,
       })
     }
     log.debug('Networks connected', {
       network: network.name_label,
       host: client.host.name_label,
-      centerHost: centerClient.host.name_label,
       pool: client.host.$pool.name_label,
+      centerHost: centerClient.host.name_label,
       centerPool: centerClient.host.$pool.name_label,
+      uuid,
     })
   }
 
