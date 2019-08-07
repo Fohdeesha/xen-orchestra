@@ -44,7 +44,8 @@ export class OvsdbClient {
     networkUuid,
     networkName,
     remoteAddress,
-    encapsulation
+    encapsulation,
+    remoteNetwork
   ) {
     if (
       this._adding.find(
@@ -88,6 +89,11 @@ export class OvsdbClient {
 
     // Add interface and port to the bridge
     const options = ['map', [['remote_ip', remoteAddress]]]
+
+    const otherConfig =
+      remoteNetwork !== undefined
+        ? ['map', [['remote_network', remoteNetwork]]]
+        : ['map', [['private_pool_wide', 'true']]]
     const addInterfaceOperation = {
       op: 'insert',
       table: 'Interface',
@@ -95,7 +101,7 @@ export class OvsdbClient {
         type: encapsulation,
         options: options,
         name: interfaceName,
-        other_config: ['map', [['private_pool_wide', 'true']]],
+        other_config: otherConfig,
       },
       'uuid-name': 'new_iface',
     }
@@ -105,7 +111,7 @@ export class OvsdbClient {
       row: {
         name: portName,
         interfaces: ['set', [['named-uuid', 'new_iface']]],
-        other_config: ['map', [['private_pool_wide', 'true']]],
+        other_config: otherConfig,
       },
       'uuid-name': 'new_port',
     }
@@ -167,7 +173,7 @@ export class OvsdbClient {
     return bridgeName
   }
 
-  async resetForNetwork(networkUuid, networkName) {
+  async resetForNetwork(networkUuid, networkName, remoteNetwork) {
     const socket = await this._connect()
     const [bridgeUuid, bridgeName] = await this._getBridgeUuidForNetwork(
       networkUuid,
@@ -201,7 +207,11 @@ export class OvsdbClient {
       }
 
       forOwn(selectResult.other_config[1], config => {
-        if (config[0] === 'private_pool_wide' && config[1] === 'true') {
+        const shouldDelete =
+          remoteNetwork !== undefined
+            ? config[0] === 'remote_network' && config[1] === remoteNetwork
+            : config[0] === 'private_pool_wide' && config[1] === 'true'
+        if (shouldDelete) {
           portsToDelete.push(['uuid', portUuid])
         }
       })
