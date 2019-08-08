@@ -733,10 +733,12 @@ export default class Xapi extends XapiBase {
     if (!vdi.managed) {
       const { SR } = vdi
       let childrenMap = cache[SR]
-      if (childrenMap === undefined) {
-        childrenMap = cache[SR] = groupBy(
-          vdi.$SR.$VDIs,
-          _ => _.sm_config['vhd-parent']
+      if (
+        childrenMap === undefined ||
+        childrenMap.undefinedVdis !== undefined
+      ) {
+        childrenMap = cache[SR] = groupBy(vdi.$SR.$VDIs, _ =>
+          _ === undefined ? _.sm_config['vhd-parent'] : 'undefinedVdis'
         )
       }
 
