@@ -9,7 +9,7 @@ import Wizard, { Section } from 'wizard'
 import { addSubscriptions, connectStore } from 'utils'
 import {
   createBondedNetwork,
-  // createCrossPoolPrivateNetwork,
+  createCrossPoolPrivateNetwork,
   createNetwork,
   createPrivateNetwork,
   getBondModes,
@@ -166,10 +166,17 @@ const NewNetwork = decorate([
         encapsulation,
         mtu,
         name,
+        networks,
         pif,
         pifs,
         vlan,
       } = state
+      const poolIds = [pool.id]
+      const pifIds = [pif.id]
+      for (const network of networks) {
+        poolIds.push(network.pool.id)
+        pifIds.push(network.pif.id)
+      }
       return bonded
         ? createBondedNetwork({
             bondMode: bondMode.value,
@@ -181,13 +188,21 @@ const NewNetwork = decorate([
             vlan,
           })
         : isPrivate
-        ? createPrivateNetwork({
-            poolId: pool.id,
-            networkName: name,
-            networkDescription: description,
-            encapsulation: encapsulation,
-            pifId: pif.id,
-          })
+        ? networks.length > 0
+          ? createCrossPoolPrivateNetwork({
+              xoPoolIds: poolIds,
+              networkName: name,
+              networkDescription: description,
+              encapsulation: encapsulation,
+              xoPifIds: pifIds,
+            })
+          : createPrivateNetwork({
+              poolId: pool.id,
+              networkName: name,
+              networkDescription: description,
+              encapsulation: encapsulation,
+              pifId: pif.id,
+            })
         : createNetwork({
             description,
             mtu,
