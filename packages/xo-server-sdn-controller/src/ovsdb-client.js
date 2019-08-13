@@ -57,9 +57,10 @@ export class OvsdbClient {
     const adding = { id: networkUuid, addr: remoteAddress }
     this._adding.push(adding)
 
-    const socket = await this._connect()
     const index = this._numberOfPortAndInterface
     ++this._numberOfPortAndInterface
+
+    const socket = await this._connect()
 
     const [bridgeUuid, bridgeName] = await this._getBridgeUuidForNetwork(
       networkUuid,
@@ -68,7 +69,9 @@ export class OvsdbClient {
     )
     if (bridgeUuid === undefined) {
       socket.destroy()
-      this._adding = this._adding.slice(this._adding.indexOf(adding), 1)
+      this._adding = this._adding.filter(
+        elem => elem.id !== networkUuid || elem.addr !== remoteAddress
+      )
       return
     }
 
@@ -80,7 +83,9 @@ export class OvsdbClient {
     )
     if (alreadyExist) {
       socket.destroy()
-      this._adding = this._adding.slice(this._adding.indexOf(adding), 1)
+      this._adding = this._adding.filter(
+        elem => elem.id !== networkUuid || elem.addr !== remoteAddress
+      )
       return bridgeName
     }
 
@@ -92,8 +97,9 @@ export class OvsdbClient {
 
     const otherConfig =
       remoteNetwork !== undefined
-        ? ['map', [['remote_network', remoteNetwork]]]
+        ? ['map', [['cross_pool', remoteNetwork]]]
         : ['map', [['private_pool_wide', 'true']]]
+
     const addInterfaceOperation = {
       op: 'insert',
       table: 'Interface',
@@ -129,7 +135,9 @@ export class OvsdbClient {
     ]
     const jsonObjects = await this._sendOvsdbTransaction(params, socket)
 
-    this._adding = this._adding.slice(this._adding.indexOf(adding), 1)
+    this._adding = this._adding.filter(
+      elem => elem.id !== networkUuid || elem.addr !== remoteAddress
+    )
     if (jsonObjects === undefined) {
       socket.destroy()
       return
@@ -173,7 +181,12 @@ export class OvsdbClient {
     return bridgeName
   }
 
-  async resetForNetwork(networkUuid, networkName, remoteNetwork) {
+  async resetForNetwork(
+    networkUuid,
+    networkName,
+    crossPoolOnly,
+    remoteNetwork
+  ) {
     const socket = await this._connect()
     const [bridgeUuid, bridgeName] = await this._getBridgeUuidForNetwork(
       networkUuid,
@@ -208,9 +221,10 @@ export class OvsdbClient {
 
       forOwn(selectResult.other_config[1], config => {
         const shouldDelete =
-          remoteNetwork !== undefined
-            ? config[0] === 'remote_network' && config[1] === remoteNetwork
-            : config[0] === 'private_pool_wide' && config[1] === 'true'
+          (config[0] === 'private_pool_wide' && !crossPoolOnly) ||
+          (config[0] === 'cross_pool' &&
+            (remoteNetwork === undefined || config[1] === remoteNetwork))
+
         if (shouldDelete) {
           portsToDelete.push(['uuid', portUuid])
         }
