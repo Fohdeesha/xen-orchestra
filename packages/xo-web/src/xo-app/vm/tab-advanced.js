@@ -69,6 +69,9 @@ const STOP_OPERATIONS = [
   'hard_shutdown',
   'pause',
   'suspend',
+
+  // Even though it's not recognized by `xe (as of 2021-08), it's a valid operation
+  'shutdown',
 ]
 
 const forceReboot = vm => restartVm(vm, true)
@@ -582,7 +585,7 @@ export default class TabAdvanced extends Component {
                 <tr>
                   <th>{_('virtualizationMode')}</th>
                   <td>
-                    {_(getVirtualizationModeLabel(vm))}{' '}
+                    {getVirtualizationModeLabel(vm)}{' '}
                     {(vm.virtualizationMode === 'pv' || vm.virtualizationMode === 'hvm') && (
                       <ActionButton
                         btnStyle='danger'
