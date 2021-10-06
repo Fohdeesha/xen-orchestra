@@ -117,6 +117,7 @@ const messages = {
   filterOnlyManaged: 'Managed disks',
   filterOnlyOrphaned: 'Orphaned disks',
   filterOnlyRegular: 'Normal disks',
+  filterOnlyRunningVms: 'Running VMs',
   filterOnlySnapshots: 'Snapshot disks',
   filterOnlyUnmanaged: 'Unmanaged disks',
   filterSaveAs: 'Save…',
@@ -837,6 +838,9 @@ const messages = {
   addHostsErrorTitle: 'Adding host{nHosts, plural, one {} other {s}} failed',
   addHostNotHomogeneousErrorMessage: 'Host patches could not be homogenized.',
   disconnectServer: 'Disconnect',
+
+  // ----- Host item ------
+  noMoreMaintained: 'This host version is no longer maintained',
 
   // ----- Host actions ------
   disableMaintenanceMode: 'Disable maintenance mode',

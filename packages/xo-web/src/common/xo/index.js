@@ -166,9 +166,9 @@ export const resolveUrl = invoke(
 )
 
 // -------------------------------------------------------------------
-
-const createSubscription = cb => {
-  const delay = 5e3 // 5s
+// Default subscription 5s
+const createSubscription = (cb, { polling = 5e3 } = {}) => {
+  const delay = polling
   const clearCacheDelay = 6e5 // 10m
 
   // contains active and lazy subscribers
@@ -299,6 +299,17 @@ const createSubscription = cb => {
 export const subscribeCurrentUser = createSubscription(() => xo.refreshUser())
 
 export const subscribeAcls = createSubscription(() => _call('acl.get'))
+
+export const subscribeHvSupportedVersions = createSubscription(
+  async () => {
+    try {
+      return await _call('xoa.getHVSupportedVersions')
+    } catch (error) {
+      console.error(error)
+    }
+  },
+  { polling: 1e3 * 60 * 60 } // 1h
+)
 
 export const subscribeJobs = createSubscription(() => _call('job.getAll'))
 
@@ -1519,12 +1530,14 @@ export const importVm = async (file, type = 'xva', data = undefined, sr) => {
   const { name } = file
 
   info(_('startVmImport'), name)
+  // eslint-disable-next-line no-undef
   const formData = new FormData()
   if (data !== undefined && data.tables !== undefined) {
     for (const k in data.tables) {
       const tables = await data.tables[k]
       delete data.tables[k]
       for (const l in tables) {
+        // eslint-disable-next-line no-undef
         const blob = new Blob([tables[l]])
         formData.append(l, blob, k)
       }
@@ -1583,11 +1596,13 @@ export const importVms = (vms, sr) =>
   ).then(ids => ids.filter(_ => _ !== undefined))
 
 const importDisk = async ({ description, file, name, type, vmdkData }, sr) => {
+  // eslint-disable-next-line no-undef
   const formData = new FormData()
   if (vmdkData !== undefined) {
     for (const l of ['grainLogicalAddressList', 'grainFileOffsetList']) {
       const table = await vmdkData[l]
       delete vmdkData[l]
+      // eslint-disable-next-line no-undef
       const blob = new Blob([table])
       formData.append(l, blob, file.name)
     }
@@ -1601,10 +1616,10 @@ const importDisk = async ({ description, file, name, type, vmdkData }, sr) => {
   })
   formData.append('file', file)
   const result = await post(res.$sendTo, formData)
-  if (result.status !== 200) {
-    throw result.status
-  }
   const body = await result.json()
+  if (result.status !== 200) {
+    throw new Error(body.error.message)
+  }
   await body.result
 }
 
@@ -1612,7 +1627,7 @@ export const importDisks = (disks, sr) =>
   Promise.all(
     map(disks, disk =>
       importDisk(disk, sr).catch(err => {
-        error(_('diskImportFailed'), err)
+        error(_('diskImportFailed'), err.message)
         throw err
       })
     )
