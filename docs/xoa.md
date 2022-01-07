@@ -61,7 +61,7 @@ Please only use this if you have issues with [the default way to deploy XOA](ins
 Alternatively, you can deploy it by connecting to your XenServer host and executing the following:
 
 ```
-bash -c "$(curl -sS https://xoa.io/deploy)"
+bash -c "$(wget -qO- https://xoa.io/deploy)"
 ```
 
 :::tip
@@ -78,7 +78,7 @@ curl: (35) error:1407742E:SSL routines:SSL23_GET_SERVER_HELLO:tlsv1 alert protoc
 It means that the secure HTTPS protocol is not supported, you can bypass this using the unsecure command instead:
 
 ```
-bash -c "$(curl -sS http://xoa.io/deploy)"
+bash -c "$(wget -qO- http://xoa.io/deploy)"
 ```
 
 :::
@@ -103,9 +103,9 @@ In that case, you already set the password for `xoa` user. If you forgot it, see
 
 ### Manually deployed
 
-If you connect via SSH or console for the first time without using our [web deploy form](https://xen-orchestra.com/#!/xoa), be aware **there's NO default password set for security reasons**. To set it, you need to connect to your host to find the XOA VM UUID (eg via `xe vm-list`).
+If you connect via SSH or console for the first time without using our [web deploy form](https://xen-orchestra.com/#!/xoa), be aware **there is NO default password set for security reasons**. To set it, you need to connect to your host to find the XOA VM UUID (eg via `xe vm-list`).
 
-Then replace `<UUID>` with the previously find UUID, and `<password>` with your password:
+Next, you can replace `<UUID>` with the UUID you found previously, and `<password>` with your password:
 
 ```
 xe vm-param-set uuid=<UUID> xenstore-data:vm-data/system-account-xoa-password=<password>
@@ -115,7 +115,9 @@ xe vm-param-set uuid=<UUID> xenstore-data:vm-data/system-account-xoa-password=<p
 Don't forget to use quotes for your password, eg: `xenstore-data:vm-data/system-account-xoa-password='MyPassW0rd!'`
 :::
 
-Then, you could connect with `xoa` username and the password you defined in the previous command, eg with `ssh xoa@<XOA IP ADDRESS>`.
+Finally, you must reboot the VM to implement the changes.
+
+You can now connect with the `xoa` username and password you defined in the previous command, eg with `ssh xoa@<XOA IP ADDRESS>`.
 
 ### Using sudo
 

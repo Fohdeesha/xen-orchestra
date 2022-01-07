@@ -1,4 +1,4 @@
-import { createReadableSparseStream } from 'vhd-lib'
+import createReadableSparseStream from 'vhd-lib/createReadableSparseStream.js'
 import { parseOVAFile, ParsableFile } from './ova'
 
 import VMDKDirectParser from './vmdk-read'

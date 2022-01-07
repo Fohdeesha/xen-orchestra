@@ -357,6 +357,7 @@ const messages = {
   fillOptionalInformations: 'Fill information (optional)',
   selectTableReset: 'Reset',
   selectCloudConfigs: 'Select cloud config(s)…',
+  selectNetworkConfigs: 'Select network config(s)…',
 
   // --- Dates/Scheduler ---
 
@@ -581,10 +582,13 @@ const messages = {
   remoteSmbPlaceHolderDomain: 'Domain',
   remoteSmbPlaceHolderAddressShare: '<address>\\\\<share>',
   remoteSmbPlaceHolderOptions: 'Custom mount options',
+  remoteS3LabelUseHttps: 'Use HTTPS',
+  remoteS3LabelAllowInsecure: 'Allow unauthorized',
   remoteS3PlaceHolderBucket: 'AWS S3 bucket name',
   remoteS3PlaceHolderDirectory: 'Directory',
   remoteS3Region: 'Region, leave blank for default',
-  remoteS3TooltipProtocol: 'Check if you want HTTP instead of HTTPS',
+  remoteS3TooltipProtocol: 'Uncheck if you want HTTP instead of HTTPS',
+  remoteS3TooltipAcceptInsecure: 'Check if you want to accept self signed certificates',
   remotePlaceHolderPassword: 'Password(fill to edit)',
 
   // ------ New Storage -----
@@ -714,6 +718,8 @@ const messages = {
 
   // ----- VM actions ------
   cantInterPoolCopy: 'Interpool copy requires at least Enterprise plan',
+  copyExportedUrl: 'Copy the export URL of the VM',
+  downloadVm: 'Download VM',
   startVmLabel: 'Start',
   startVmOnLabel: 'Start on…',
   startVmOnMissingHostTitle: 'No host selected',
@@ -735,6 +741,7 @@ const messages = {
   cloneVmLabel: 'Clone',
   fastCloneVmLabel: 'Fast clone',
   vmConsoleLabel: 'Console',
+  vmExportUrlValidity: 'The URL is valid once for a short period of time.',
   backupLabel: 'Backup',
 
   // ----- SR general tab -----
@@ -792,6 +799,7 @@ const messages = {
   vmsTabName: 'VMs',
   srsTabName: 'SRs',
   // ----- Pool advanced tab -----
+  backupNetwork: 'Backup network',
   poolEditAll: 'Edit all',
   poolHaStatus: 'High Availability',
   poolHaEnabled: 'Enabled',
@@ -841,6 +849,7 @@ const messages = {
   disconnectServer: 'Disconnect',
 
   // ----- Host item ------
+  host: 'Host',
   noMoreMaintained: 'This host version is no longer maintained',
 
   // ----- Host actions ------
@@ -994,6 +1003,7 @@ const messages = {
   rollingPoolUpdate: 'Rolling pool update',
   rollingPoolUpdateMessage:
     'Are you sure you want to start a rolling pool update? Running VMs will be migrated back and forth and this can take a while.',
+  rollingPoolUpdateHaWarning: 'High Availability is enabled. This will automatically disable it during the update.',
   poolNeedsDefaultSr: 'The pool needs a default SR to install the patches.',
   vmsHaveCds: '{nVms, number} VM{nVms, plural, one {} other {s}} {nVms, plural, one {has} other {have}} CDs',
   ejectCds: 'Eject CDs',
@@ -1196,6 +1206,7 @@ const messages = {
   deleteSnapshots: 'Remove selected snapshots',
   copySnapshot: 'Create a VM from this snapshot',
   exportSnapshot: 'Export this snapshot',
+  exportSnapshotMemory: 'Export snapshot memory',
   secureBoot: 'Secure boot',
   snapshotDate: 'Creation date',
   snapshotError: 'Snapshot error',
@@ -1257,6 +1268,7 @@ const messages = {
   vmLimitsLabel: 'VM limits',
   resourceSet: 'Resource set',
   resourceSetNone: 'None',
+  suspendSr: 'Suspend SR',
   vmCpuLimitsLabel: 'CPU limits',
   vmCpuTopology: 'Topology',
   vmChooseCoresPerSocket: 'Default behavior',
@@ -1370,6 +1382,9 @@ const messages = {
   detachedBackups: 'Detached backups',
   detachedVmSnapshots: 'Detached VM snapshots',
   duplicatedMacAddresses: 'Duplicated MAC addresses',
+  localDefaultSrs: 'Local default SRs',
+  localDefaultSrsStatusTip:
+    "It is usually recommended for a pool's default SR to be shared to avoid unexpected behaviors",
   missingJob: 'Missing job',
   missingVm: 'Missing VM',
   missingVmInJob: 'This VM does not belong to this job',
@@ -1383,6 +1398,7 @@ const messages = {
   noOrphanedObject: 'No orphans',
   tooManySnapshots: 'Too many snapshots',
   tooManySnapshotsTip: 'VMs with more than the recommended amount of snapshots',
+  noLocalDefaultSrs: 'No local default SRs',
   noTooManySnapshotsObject: 'No VMs with too many snapshots',
   numberOfSnapshots: 'Number of snapshots',
   guestToolStatus: 'Guest Tools status',
@@ -1651,6 +1667,8 @@ const messages = {
   stopHostModalTitle: 'Shutdown host',
   stopHostModalMessage:
     "This will shutdown your host. Do you want to continue? If it's the pool master, your connection to the pool will be lost",
+  forceStopHost: 'Force shutdown host',
+  forceStopHostMessage: 'This will shutdown your host without evacuating its VMs. Do you want to continue?',
   addHostModalTitle: 'Add host',
   addHostModalMessage: 'Are you sure you want to add {host} to {pool}?',
   restartHostModalTitle: 'Restart host',
@@ -1751,6 +1769,8 @@ const messages = {
   disconnectVbdsModalTitle: 'Disconnect VBD{nVbds, plural, one {} other {s}}',
   disconnectVbdsModalMessage:
     'Are you sure you want to disconnect {nVbds, number} VBD{nVbds, plural, one {} other {s}}?',
+  disableHost: 'Disable host',
+  disableHostModalMessage: 'Are you sure you want to disable {host}? This will prevent new VMs from starting.',
   revertVmModalMessage:
     'Are you sure you want to revert this VM to the snapshot state? This operation is irreversible.',
   revertVmModalSnapshotBefore: 'Snapshot before',
@@ -1821,6 +1841,8 @@ const messages = {
   serverEnabled: 'Enabled',
   serverDisabled: 'Disabled',
   serverDisable: 'Disable server',
+  serverHttpProxy: ' HTTP proxy URL',
+  serverHttpProxyPlaceHolder: ' HTTP proxy URL',
 
   // ----- Copy VM -----
   copyVm: 'Copy VM',
@@ -2112,9 +2134,14 @@ const messages = {
   confirmDeleteCloudConfigsTitle: 'Delete cloud config{nCloudConfigs, plural, one {} other {s}}',
   confirmDeleteCloudConfigsBody:
     'Are you sure you want to delete {nCloudConfigs, number} cloud config{nCloudConfigs, plural, one {} other {s}}?',
+  confirmDeleteNetworkConfigsTitle: 'Delete network config{nNetworkConfigs, plural, one {} other {s}}',
+  confirmDeleteNetworkConfigsBody:
+    'Are you sure you want to delete {nNetworkConfigs, number} network config{nNetworkConfigs, plural, one {} other {s}}?',
   deleteCloudConfig: 'Delete cloud config',
   editCloudConfig: 'Edit cloud config',
   deleteSelectedCloudConfigs: 'Delete selected cloud configs',
+  networkConfig: 'Network config',
+  cloudConfig: 'Cloud config',
 
   // ----- Config -----
   noConfigFile: 'No config file selected',
@@ -2372,6 +2399,7 @@ const messages = {
   proxyUpToDate: 'Your proxy is up-to-date',
   proxyRunningBackupsMessage:
     'The upgrade will interrupt {nJobs, number} running backup job{nJobs, plural, one {} other {s}}. Do you want to continue?',
+  proxiesNeedUpgrade: 'Some proxies need to be upgraded.',
   upgradeNeededForProxies: 'Some proxies need to be upgraded. Click here to get more information.',
 
   // ----- Utils -----

@@ -15,24 +15,29 @@ import { createLogger } from '@xen-orchestra/log'
 const { debug, warn } = createLogger('xo:proxy:api')
 
 const ndJsonStream = asyncIteratorToStream(async function* (responseId, iterable) {
-  let headerSent = false
   try {
-    for await (const data of iterable) {
-      if (!headerSent) {
-        yield format.response(responseId, { $responseType: 'ndjson' }) + '\n'
-        headerSent = true
-      }
+    let cursor, iterator
+    try {
+      const getIterator = iterable[Symbol.iterator] ?? iterable[Symbol.asyncIterator]
+      iterator = getIterator.call(iterable)
+
+      cursor = await iterator.next()
+      yield format.response(responseId, { $responseType: 'ndjson' }) + '\n'
+    } catch (error) {
+      yield format.error(responseId, error)
+      throw error
+    }
+
+    while (!cursor.done) {
       try {
-        yield JSON.stringify(data) + '\n'
+        yield JSON.stringify(cursor.value) + '\n'
       } catch (error) {
         warn('ndJsonStream, item error', { error })
       }
+      cursor = await iterator.next()
     }
   } catch (error) {
     warn('ndJsonStream, fatal error', { error })
-    if (!headerSent) {
-      yield format.error(responseId, error)
-    }
   }
 })
 

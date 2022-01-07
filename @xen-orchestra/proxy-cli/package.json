@@ -23,22 +23,22 @@
     "xo-proxy-cli": "dist/index.js"
   },
   "engines": {
-    "node": ">=8.10"
+    "node": ">=12"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.0",
     "@vates/read-chunk": "^0.1.2",
     "ansi-colors": "^4.1.1",
-    "app-conf": "^0.9.0",
+    "app-conf": "^1.0.0",
     "content-type": "^1.0.4",
     "cson-parser": "^4.0.7",
     "getopts": "^2.2.3",
-    "http-request-plus": "^0.12",
+    "http-request-plus": "^0.13.0",
     "json-rpc-protocol": "^0.13.1",
-    "promise-toolbox": "^0.19.2",
+    "promise-toolbox": "^0.20.0",
     "pump": "^3.0.0",
     "pumpify": "^2.0.1",
-    "split2": "^3.1.1"
+    "split2": "^4.1.0"
   },
   "devDependencies": {
     "@babel/cli": "^7.0.0",

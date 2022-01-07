@@ -9,6 +9,7 @@ import { FAIL_ON_QUEUE } from 'limit-concurrency-decorator'
 import { format } from 'json-rpc-peer'
 import { ignoreErrors } from 'promise-toolbox'
 import { invalidParameters, noSuchObject, operationFailed, unauthorized } from 'xo-common/api-errors.js'
+import { Ref } from 'xen-api'
 
 import { forEach, map, mapFilter, parseSize, safeDateFormat } from '../utils.mjs'
 
@@ -534,6 +535,11 @@ export const set = defer(async function ($defer, params) {
     await this.shareVmResourceSet(vmId)
   }
 
+  const suspendSr = extract(params, 'suspendSr')
+  if (suspendSr !== undefined) {
+    await xapi.call('VM.set_suspend_SR', VM._xapiRef, suspendSr === null ? Ref.EMPTY : suspendSr._xapiRef)
+  }
+
   return xapi.editVm(vmId, params, async (limits, vm) => {
     const resourceSet = xapi.xo.getData(vm, 'resourceSet')
 
@@ -632,10 +638,13 @@ set.params = {
   virtualizationMode: { type: 'string', optional: true },
 
   blockedOperations: { type: 'object', optional: true },
+
+  suspendSr: { type: ['string', 'null'], optional: true },
 }
 
 set.resolve = {
   VM: ['id', ['VM', 'VM-snapshot', 'VM-template'], 'administrate'],
+  suspendSr: ['suspendSr', 'SR', 'administrate'],
 }
 
 // -------------------------------------------------------------------
@@ -659,22 +668,28 @@ export const clone = defer(async function ($defer, { vm, name, full_copy: fullCo
   await checkPermissionOnSrs.call(this, vm)
   const xapi = this.getXapi(vm)
 
-  const { $id: cloneId, $ref: cloneRef } = await xapi.cloneVm(vm._xapiRef, {
+  const newVm = await xapi.cloneVm(vm._xapiRef, {
     nameLabel: name,
     fast: !fullCopy,
   })
-  $defer.onFailure(() => xapi.VM_destroy(cloneRef))
+  $defer.onFailure(() => xapi.VM_destroy(newVm.$ref))
+
+  // A snapshot may have its `is_a_template` flag set to true, which isn't
+  // automatically set to false when cloning it
+  if (vm.type !== 'VM-template') {
+    await newVm.set_is_a_template(false)
+  }
 
   const isAdmin = this.user.permission === 'admin'
   if (!isAdmin) {
-    await this.addAcl(this.user.id, cloneId, 'admin')
+    await this.addAcl(this.user.id, newVm.$id, 'admin')
   }
 
   if (vm.resourceSet !== undefined) {
     await this.allocateLimitsInResourceSet(await this.computeVmResourcesUsage(vm), vm.resourceSet, isAdmin)
   }
 
-  return cloneId
+  return newVm.$id
 })
 
 clone.params = {
@@ -691,25 +706,32 @@ clone.resolve = {
 
 // TODO: implement resource sets
 export async function copy({ compress, name: nameLabel, sr, vm }) {
+  let newVm
   if (vm.$pool === sr.$pool) {
     if (vm.power_state === 'Running') {
       await checkPermissionOnSrs.call(this, vm)
     }
 
-    return this.getXapi(vm)
-      .copyVm(vm._xapiId, {
+    newVm = await this.getXapi(vm).copyVm(vm._xapiId, {
+      nameLabel,
+      srOrSrId: sr._xapiId,
+    })
+  } else {
+    newVm = (
+      await this.getXapi(vm).remoteCopyVm(vm._xapiId, this.getXapi(sr), sr._xapiId, {
+        compress,
         nameLabel,
-        srOrSrId: sr._xapiId,
       })
-      .then(vm => vm.$id)
+    ).vm
   }
 
-  return this.getXapi(vm)
-    .remoteCopyVm(vm._xapiId, this.getXapi(sr), sr._xapiId, {
-      compress,
-      nameLabel,
-    })
-    .then(({ vm }) => vm.$id)
+  // A snapshot may have its `is_a_template` flag set to true, which isn't
+  // automatically set to false when copying it
+  if (vm.type !== 'VM-template') {
+    await newVm.set_is_a_template(false)
+  }
+
+  return newVm.$id
 }
 
 copy.params = {
@@ -1037,8 +1059,9 @@ async function handleVmImport(req, res, { data, srId, type, xapi }) {
   // Timeout seems to be broken in Node 4.
   // See https://github.com/nodejs/node/issues/3319
   req.setTimeout(43200000) // 12 hours
-
-  const vm = await (req.headers['content-type'] === 'multipart/form-data'
+  // expect "multipart/form-data; boundary=something"
+  const contentType = req.headers['content-type']
+  const vm = await (contentType != undefined && contentType.startsWith('multipart/form-data')
     ? new Promise((resolve, reject) => {
         const form = new multiparty.Form()
         const promises = []

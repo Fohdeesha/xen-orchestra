@@ -149,6 +149,10 @@
     @extend .fa;
     @extend .fa-keyboard-o;
   }
+  &-git {
+    @extend .fa;
+    @extend .fa-git-square;
+  }
   &-info {
     @extend .fa;
     @extend .fa-info-circle;
@@ -327,6 +331,10 @@
     @extend .fa-ticket;
   }
   &-circle {
+    @extend .fa;
+    @extend .fa-circle;
+  }
+  &-circle-thin {
     @extend .fa;
     @extend .fa-circle-thin;
   }

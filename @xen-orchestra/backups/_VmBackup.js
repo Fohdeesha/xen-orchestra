@@ -1,9 +1,10 @@
 const assert = require('assert')
 const findLast = require('lodash/findLast.js')
+const groupBy = require('lodash/groupBy.js')
 const ignoreErrors = require('promise-toolbox/ignoreErrors.js')
 const keyBy = require('lodash/keyBy.js')
 const mapValues = require('lodash/mapValues.js')
-const { asyncMap, asyncMapSettled } = require('@xen-orchestra/async-map')
+const { asyncMap } = require('@xen-orchestra/async-map')
 const { createLogger } = require('@xen-orchestra/log')
 const { defer } = require('golike-defer')
 const { formatDateTime } = require('@xen-orchestra/xapi')
@@ -35,6 +36,11 @@ const forkDeltaExport = deltaExport =>
 
 exports.VmBackup = class VmBackup {
   constructor({ config, getSnapshotNameLabel, job, remoteAdapters, remotes, schedule, settings, srs, vm }) {
+    if (vm.other_config['xo:backup:job'] === job.id) {
+      // otherwise replicated VMs would be matched and replicated again and again
+      throw new Error('cannot backup a VM created by this very job')
+    }
+
     this.config = config
     this.job = job
     this.remoteAdapters = remoteAdapters
@@ -284,17 +290,28 @@ exports.VmBackup = class VmBackup {
   }
 
   async _removeUnusedSnapshots() {
-    // TODO: handle all schedules (no longer existing schedules default to 0 retention)
-
-    const { scheduleId } = this
-    const scheduleSnapshots = this._jobSnapshots.filter(_ => _.other_config['xo:backup:schedule'] === scheduleId)
-
+    const jobSettings = this.job.settings
     const baseVmRef = this._baseVm?.$ref
+    const { config } = this
+    const baseSettings = {
+      ...config.defaultSettings,
+      ...config.metadata.defaultSettings,
+      ...jobSettings[''],
+    }
+
+    const snapshotsPerSchedule = groupBy(this._jobSnapshots, _ => _.other_config['xo:backup:schedule'])
     const xapi = this._xapi
-    await asyncMap(getOldEntries(this._settings.snapshotRetention, scheduleSnapshots), ({ $ref }) => {
-      if ($ref !== baseVmRef) {
-        return xapi.VM_destroy($ref)
+    await asyncMap(Object.entries(snapshotsPerSchedule), ([scheduleId, snapshots]) => {
+      const settings = {
+        ...baseSettings,
+        ...jobSettings[scheduleId],
+        ...jobSettings[this.vm.uuid],
       }
+      return asyncMap(getOldEntries(settings.snapshotRetention, snapshots), ({ $ref }) => {
+        if ($ref !== baseVmRef) {
+          return xapi.VM_destroy($ref)
+        }
+      })
     })
   }
 
@@ -321,13 +338,16 @@ exports.VmBackup = class VmBackup {
 
     const baseUuidToSrcVdi = new Map()
     await asyncMap(await baseVm.$getDisks(), async baseRef => {
-      const snapshotOf = await xapi.getField('VDI', baseRef, 'snapshot_of')
+      const [baseUuid, snapshotOf] = await Promise.all([
+        xapi.getField('VDI', baseRef, 'uuid'),
+        xapi.getField('VDI', baseRef, 'snapshot_of'),
+      ])
       const srcVdi = srcVdis[snapshotOf]
       if (srcVdi !== undefined) {
-        baseUuidToSrcVdi.set(await xapi.getField('VDI', baseRef, 'uuid'), srcVdi)
+        baseUuidToSrcVdi.set(baseUuid, srcVdi)
       } else {
-        debug('no base VDI found', {
-          vdi: srcVdi.uuid,
+        debug('ignore snapshot VDI because no longer present on VM', {
+          vdi: baseUuid,
         })
       }
     })
@@ -338,6 +358,11 @@ exports.VmBackup = class VmBackup {
       'writer.checkBaseVdis()',
       false
     )
+
+    if (presentBaseVdis.size === 0) {
+      debug('no base VM found')
+      return
+    }
 
     const fullVdisRequired = new Set()
     baseUuidToSrcVdi.forEach((srcVdi, baseUuid) => {

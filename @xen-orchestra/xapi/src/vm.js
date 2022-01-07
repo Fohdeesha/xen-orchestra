@@ -60,7 +60,7 @@ module.exports = class Vm {
       try {
         vdi = await this[vdiRefOrUuid.startsWith('OpaqueRef:') ? 'getRecord' : 'getRecordByUuid']('VDI', vdiRefOrUuid)
       } catch (error) {
-        warn(error)
+        warn('_assertHealthyVdiChain, could not fetch VDI', { error })
         return
       }
       cache[vdi.$ref] = vdi
@@ -81,7 +81,7 @@ module.exports = class Vm {
                   try {
                     vdi = await this.getRecord('VDI', vdiRef)
                   } catch (error) {
-                    warn(error)
+                    warn('_assertHealthyVdiChain, could not fetch VDI', { error })
                     return
                   }
                   cache[vdiRef] = vdi
@@ -99,6 +99,7 @@ module.exports = class Vm {
       // should coalesce
       const children = childrenMap[vdi.uuid]
       if (
+        children !== undefined && // unused unmanaged VDI, will be GC-ed
         children.length === 1 &&
         !children[0].managed && // some SRs do not coalesce the leaf
         tolerance-- <= 0
@@ -166,7 +167,7 @@ module.exports = class Vm {
       memory_static_min,
       name_description,
       name_label,
-      // NVRAM, // experimental
+      NVRAM,
       order,
       other_config = {},
       PCI_bus = '',
@@ -255,6 +256,7 @@ module.exports = class Vm {
       is_vmss_snapshot,
       name_description,
       name_label,
+      NVRAM,
       order,
       reference_label,
       shutdown_delay,

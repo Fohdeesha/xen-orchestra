@@ -1,7 +1,6 @@
 import _ from 'intl'
 import Component from 'base-component'
 import decorate from 'apply-decorators'
-import fromCallback from 'promise-toolbox/fromCallback'
 import { get as getDefined } from '@xen-orchestra/defined'
 import Icon from 'icon'
 import Link from 'link'
@@ -9,14 +8,13 @@ import NoObjects from 'no-objects'
 import React from 'react'
 import SortedTable from 'sorted-table'
 import Tooltip from 'tooltip'
-import xml2js from 'xml2js'
-import { Network, Sr, Vm } from 'render-xo-item'
+import { Host, Network, Pool, Sr, Vm } from 'render-xo-item'
 import { SelectPool } from 'select-objects'
 import { Container, Row, Col } from 'grid'
 import { Card, CardHeader, CardBlock } from 'card'
 import { FormattedRelative, FormattedTime } from 'react-intl'
-import { flatten, forEach, get, includes, isEmpty, map, mapValues } from 'lodash'
-import { connectStore, formatSize, noop, resolveIds } from 'utils'
+import { countBy, filter, flatten, forEach, includes, isEmpty, map, pick } from 'lodash'
+import { connectStore, formatLogs, formatSize, noop, resolveIds } from 'utils'
 import {
   deleteMessage,
   deleteMessages,
@@ -106,6 +104,23 @@ const DUPLICATED_MAC_ADDRESSES_COLUMNS = [
 const DUPLICATED_MAC_ADDRESSES_FILTERS = {
   filterOnlyRunningVms: 'nRunningVms:>1',
 }
+
+const LOCAL_DEFAULT_SRS_COLUMNS = [
+  {
+    name: _('pool'),
+    itemRenderer: pool => <Pool id={pool.id} link />,
+    sortCriteria: 'name_label',
+  },
+  {
+    name: _('sr'),
+    itemRenderer: pool => <Sr container={false} id={pool.default_SR} link spaceLeft={false} />,
+  },
+  {
+    name: _('host'),
+    itemRenderer: (pool, { srs }) => <Host id={srs[pool.default_SR].$container} link pool={false} />,
+    sortCriteria: (pool, { hosts, srs }) => hosts[srs[pool.default_SR].$container].name_label,
+  },
+]
 
 const SR_COLUMNS = [
   {
@@ -530,8 +545,10 @@ const HANDLED_VDI_TYPES = new Set(['system', 'user', 'ephemeral'])
   return {
     alertMessages: getAlertMessages,
     areObjectsFetched,
+    hosts: createGetObjectsOfType('host'),
     orphanVdis: getOrphanVdis,
     orphanVmSnapshots: getOrphanVmSnapshots,
+    pools: createGetObjectsOfType('pool'),
     tooManySnapshotsVms: getTooManySnapshotsVms,
     guestToolsVms: getGuestToolsVms,
     userSrs: getUserSrs,
@@ -555,26 +572,7 @@ export default class Health extends Component {
   }
 
   _updateAlarms = props => {
-    Promise.all(
-      map(props.alertMessages, ({ body }, id) => {
-        const matches = /^value:\s*([0-9.]+)\s+config:\s*([^]*)$/.exec(body)
-        if (!matches) {
-          return
-        }
-
-        const [, value, xml] = matches
-        return fromCallback(xml2js.parseString, xml).then(result => {
-          const object = mapValues(result && result.variable, value => get(value, '[0].$.value'))
-          if (!object || !object.name) {
-            return
-          }
-
-          const { name, ...alarmAttributes } = object
-
-          return { name, value, alarmAttributes, id }
-        }, noop)
-      })
-    ).then(formattedMessages => {
+    formatLogs(props.alertMessages).then(formattedMessages => {
       this.setState({
         messages: map(formattedMessages, ({ id, ...formattedMessage }) => ({
           formatted: formattedMessage,
@@ -602,6 +600,22 @@ export default class Health extends Component {
           }
         }
         return duplicatedMacAddresses.sort()
+      }
+    )
+  )
+
+  _getLocalDefaultSrs = createCollectionWrapper(
+    createSelector(
+      () => this.props.hosts,
+      () => this.props.pools,
+      () => this.props.userSrs,
+      () => this._getPoolIds(),
+      (hosts, pools, userSrs, poolIds) => {
+        const nbHostsPerPool = countBy(hosts, host => host.$pool)
+        return filter(isEmpty(poolIds) ? pools : pick(pools, poolIds), pool => {
+          const { default_SR } = pool
+          return default_SR !== undefined && !userSrs[default_SR].shared && nbHostsPerPool[pool.id] > 1
+        })
       }
     )
   )
@@ -637,6 +651,7 @@ export default class Health extends Component {
     const { props, state } = this
 
     const duplicatedMacAddresses = this._getDuplicatedMacAddresses()
+    const localDefaultSrs = this._getLocalDefaultSrs()
     const userSrs = this._getUserSrs()
     const orphanVdis = this._getOrphanVdis()
 
@@ -671,6 +686,41 @@ export default class Health extends Component {
             </Card>
           </Col>
         </Row>
+        {localDefaultSrs.length > 0 && (
+          <Row>
+            <Col>
+              <Card>
+                <CardHeader>
+                  <Icon icon='disk' /> {_('localDefaultSrs')}
+                </CardHeader>
+                <CardBlock>
+                  <p>
+                    <Icon icon='info' /> <em>{_('localDefaultSrsStatusTip')}</em>
+                  </p>
+                  <NoObjects
+                    collection={props.areObjectsFetched ? localDefaultSrs : null}
+                    emptyMessage={_('noLocalDefaultSrs')}
+                  >
+                    {() => (
+                      <Row>
+                        <Col>
+                          <SortedTable
+                            collection={localDefaultSrs}
+                            columns={LOCAL_DEFAULT_SRS_COLUMNS}
+                            data-hosts={props.hosts}
+                            data-srs={userSrs}
+                            shortcutsTarget='body'
+                            stateUrlParam='s_local_default_srs'
+                          />
+                        </Col>
+                      </Row>
+                    )}
+                  </NoObjects>
+                </CardBlock>
+              </Card>
+            </Col>
+          </Row>
+        )}
         <Row>
           <Col>
             <Card>

@@ -82,6 +82,7 @@ export default class Xapi extends XapiBase {
     restartHostTimeout,
     vdiExportConcurrency,
     vmExportConcurrency,
+    vmMigrationConcurrency = 3,
     vmSnapshotConcurrency,
     ...opts
   }) {
@@ -96,6 +97,7 @@ export default class Xapi extends XapiBase {
     this._exportVdi = limitConcurrency(vdiExportConcurrency, waitStreamEnd)(this._exportVdi)
     this.exportVm = limitConcurrency(vmExportConcurrency, waitStreamEnd)(this.exportVm)
 
+    this._migrateVmWithStorageMotion = limitConcurrency(vmMigrationConcurrency)(this._migrateVmWithStorageMotion)
     this._snapshotVm = limitConcurrency(vmSnapshotConcurrency)(this._snapshotVm)
 
     // Patch getObject to resolve _xapiId property.
@@ -161,7 +163,15 @@ export default class Xapi extends XapiBase {
   // =================================================================
 
   async joinPool(masterAddress, masterUsername, masterPassword, force = false) {
-    await this.call(force ? 'pool.join_force' : 'pool.join', masterAddress, masterUsername, masterPassword)
+    try {
+      await this.call(force ? 'pool.join_force' : 'pool.join', masterAddress, masterUsername, masterPassword)
+    } catch (error) {
+      const params = error?.call?.params
+      if (Array.isArray(params)) {
+        params[2] = '* obfuscated *'
+      }
+      throw error
+    }
   }
 
   // =================================================================
@@ -297,10 +307,13 @@ export default class Xapi extends XapiBase {
     await this.call('host.syslog_reconfigure', host.$ref)
   }
 
-  async shutdownHost(hostId, force = false) {
+  async shutdownHost(hostId, { force = false, bypassEvacuate = false }) {
     const host = this.getObject(hostId)
-
-    await this.clearHost(host, force)
+    if (bypassEvacuate) {
+      await this.call('host.disable', host.$ref)
+    } else {
+      await this.clearHost(host, force)
+    }
     await this.callAsync('host.shutdown', host.$ref)
   }
 

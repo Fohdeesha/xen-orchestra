@@ -76,6 +76,8 @@ defaultSignInPage = '/signin'
 throttlingDelay = '2 seconds'
 
 [backups]
+disableMergeWorker = false
+
 # Mode to use for newly created backup directories
 #
 # https://en.wikipedia.org/wiki/File-system_permissions#Numeric_notation
@@ -84,6 +86,8 @@ snapshotNameLabelTpl = '[XO Backup {job.name}] {vm.name_label}'
 
 # Delay for which backups listing on a remote is cached
 listingDebounce = '1 min'
+
+vhdDirectoryCompression = 'brotli'
 
 [backups.defaultSettings]
 reportWhen = 'failure'

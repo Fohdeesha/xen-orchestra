@@ -3,7 +3,7 @@ const map = require('lodash/map.js')
 const mapValues = require('lodash/mapValues.js')
 const ignoreErrors = require('promise-toolbox/ignoreErrors.js')
 const { asyncMap } = require('@xen-orchestra/async-map')
-const { chainVhd, checkVhdChain, default: Vhd } = require('vhd-lib')
+const { chainVhd, checkVhdChain, openVhd, VhdAbstract } = require('vhd-lib')
 const { createLogger } = require('@xen-orchestra/log')
 const { dirname } = require('path')
 
@@ -16,6 +16,7 @@ const { MixinBackupWriter } = require('./_MixinBackupWriter.js')
 const { AbstractDeltaWriter } = require('./_AbstractDeltaWriter.js')
 const { checkVhd } = require('./_checkVhd.js')
 const { packUuid } = require('./_packUuid.js')
+const { Disposable } = require('promise-toolbox')
 
 const { warn } = createLogger('xo:backups:DeltaBackupWriter')
 
@@ -23,6 +24,7 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
   async checkBaseVdis(baseUuidToSrcVdi) {
     const { handler } = this._adapter
     const backup = this._backup
+    const adapter = this._adapter
 
     const backupDir = getVmBackupDir(backup.vm.uuid)
     const vdisDir = `${backupDir}/vdis/${backup.job.id}`
@@ -34,16 +36,21 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
           filter: _ => _[0] !== '.' && _.endsWith('.vhd'),
           prependDir: true,
         })
+        const packedBaseUuid = packUuid(baseUuid)
         await asyncMap(vhds, async path => {
           try {
             await checkVhdChain(handler, path)
+            // Warning, this should not be written as found = found || await adapter.isMergeableParent(packedBaseUuid, path)
+            //
+            // since all the checks of a path are done in parallel, found would be containing
+            // only the last answer of isMergeableParent which is probably not the right one
+            // this led to the support tickets  https://help.vates.fr/#ticket/zoom/4751 , 4729, 4665 and 4300
 
-            const vhd = new Vhd(handler, path)
-            await vhd.readHeaderAndFooter()
-            found = found || vhd.footer.uuid.equals(packUuid(baseUuid))
+            const isMergeable = await adapter.isMergeableParent(packedBaseUuid, path)
+            found = found || isMergeable
           } catch (error) {
             warn('checkBaseVdis', { error })
-            await ignoreErrors.call(handler.unlink(path))
+            await ignoreErrors.call(VhdAbstract.unlink(handler, path))
           }
         })
       } catch (error) {
@@ -113,19 +120,13 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
   }
 
   async _deleteOldEntries() {
-    return Task.run({ name: 'merge' }, async () => {
-      const adapter = this._adapter
-      const oldEntries = this._oldEntries
+    const adapter = this._adapter
+    const oldEntries = this._oldEntries
 
-      let size = 0
-      // delete sequentially from newest to oldest to avoid unnecessary merges
-      for (let i = oldEntries.length; i-- > 0; ) {
-        size += await adapter.deleteDeltaVmBackups([oldEntries[i]])
-      }
-      return {
-        size,
-      }
-    })
+    // delete sequentially from newest to oldest to avoid unnecessary merges
+    for (let i = oldEntries.length; i-- > 0; ) {
+      await adapter.deleteDeltaVmBackups([oldEntries[i]])
+    }
   }
 
   async _transfer({ timestamp, deltaExport, sizeContainers }) {
@@ -150,7 +151,7 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
               // don't do delta for it
               vdi.uuid
             : vdi.$snapshot_of$uuid
-        }/${basename}.vhd`
+        }/${adapter.getVhdFileName(basename)}`
     )
 
     const metadataFilename = `${backupDir}/${basename}.json`
@@ -194,7 +195,7 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
             await checkVhd(handler, parentPath)
           }
 
-          await adapter.outputStream(path, deltaExport.streams[`${id}.vhd`], {
+          await adapter.writeVhd(path, deltaExport.streams[`${id}.vhd`], {
             // no checksum for VHDs, because they will be invalidated by
             // merges and chainings
             checksum: false,
@@ -206,11 +207,11 @@ exports.DeltaBackupWriter = class DeltaBackupWriter extends MixinBackupWriter(Ab
           }
 
           // set the correct UUID in the VHD
-          const vhd = new Vhd(handler, path)
-          await vhd.readHeaderAndFooter()
-          vhd.footer.uuid = packUuid(vdi.uuid)
-          await vhd.readBlockAllocationTable() // required by writeFooter()
-          await vhd.writeFooter()
+          await Disposable.use(openVhd(handler, path), async vhd => {
+            vhd.footer.uuid = packUuid(vdi.uuid)
+            await vhd.readBlockAllocationTable() // required by writeFooter()
+            await vhd.writeFooter()
+          })
         })
       )
       return {

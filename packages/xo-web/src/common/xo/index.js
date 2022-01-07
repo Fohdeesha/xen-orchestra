@@ -1,5 +1,6 @@
 import asap from 'asap'
 import cookies from 'js-cookie'
+import copy from 'copy-to-clipboard'
 import fpSortBy from 'lodash/fp/sortBy'
 import React from 'react'
 import updater from 'xoa-updater'
@@ -13,6 +14,7 @@ import { filter, forEach, get, includes, isEmpty, isEqual, map, once, size, sort
 import { forbiddenOperation, incorrectState, noHostsAvailable, vmLacksFeature } from 'xo-common/api-errors'
 
 import _ from '../intl'
+import ActionButton from '../action-button'
 import fetch, { post } from '../fetch'
 import invoke from '../invoke'
 import Icon from '../icon'
@@ -475,6 +477,25 @@ subscribeHostMissingPatches.forceRefresh = host => {
   }
 }
 
+const proxiesApplianceUpdaterState = {}
+export const subscribeProxiesApplianceUpdaterState = (proxyId, cb) => {
+  if (proxiesApplianceUpdaterState[proxyId] === undefined) {
+    proxiesApplianceUpdaterState[proxyId] = createSubscription(() => getProxyApplianceUpdaterState(proxyId))
+  }
+  return proxiesApplianceUpdaterState[proxyId](cb)
+}
+subscribeProxiesApplianceUpdaterState.forceRefresh = proxyId => {
+  if (proxyId === undefined) {
+    forEach(proxiesApplianceUpdaterState, subscription => subscription.forceRefresh())
+    return
+  }
+
+  const subscription = proxiesApplianceUpdaterState[proxyId]
+  if (subscription !== undefined) {
+    subscription.forceRefresh()
+  }
+}
+
 const volumeInfoBySr = {}
 export const subscribeVolumeInfo = ({ sr, infoType }, cb) => {
   sr = resolveId(sr)
@@ -558,10 +579,11 @@ export const exportConfig = () =>
 
 // Server ------------------------------------------------------------
 
-export const addServer = (host, username, password, label, allowUnauthorized) =>
+export const addServer = (host, username, password, label, allowUnauthorized, httpProxy) =>
   _call('server.add', {
     allowUnauthorized,
     host,
+    httpProxy,
     label,
     password,
     username,
@@ -674,6 +696,15 @@ export const detachHost = host =>
     }),
   }).then(() => _call('host.detach', { host: host.id }))
 
+export const disableHost = host =>
+  confirm({
+    icon: 'host-disable',
+    title: _('disableHost'),
+    body: _('disableHostModalMessage', {
+      host: <strong>{host.name_label}</strong>,
+    }),
+  }).then(() => _call('host.disable', { host: resolveId(host) }))
+
 export const forgetHost = host =>
   confirm({
     icon: 'host-forget',
@@ -682,6 +713,8 @@ export const forgetHost = host =>
       host: <strong>{host.name_label}</strong>,
     }),
   }).then(() => _call('host.forget', { host: resolveId(host) }))
+
+export const enableHost = host => _call('host.enable', { host: resolveId(host) })
 
 export const setDefaultSr = sr => _call('pool.setDefaultSr', { sr: resolveId(sr) })
 
@@ -774,11 +807,26 @@ export const restartHostsAgents = hosts => {
 
 export const startHost = host => _call('host.start', { id: resolveId(host) })
 
-export const stopHost = host =>
-  confirm({
-    title: _('stopHostModalTitle'),
+export const stopHost = async host => {
+  await confirm({
     body: _('stopHostModalMessage'),
-  }).then(() => _call('host.stop', { id: resolveId(host) }), noop)
+    title: _('stopHostModalTitle'),
+  })
+
+  try {
+    await _call('host.stop', { id: resolveId(host) })
+  } catch (err) {
+    if (err.message === 'no hosts available') {
+      // Retry with bypassEvacuate.
+      await confirm({
+        body: _('forceStopHostMessage'),
+        title: _('forceStopHost'),
+      })
+      return _call('host.stop', { id: resolveId(host), bypassEvacuate: true })
+    }
+    throw error
+  }
+}
 
 export const stopHosts = hosts => {
   const nHosts = size(hosts)
@@ -888,9 +936,10 @@ export const installAllPatchesOnPool = ({ pool }) => {
   )
 }
 
+import RollingPoolUpdateModal from './rolling-pool-updates-modal' // eslint-disable-line import/first
 export const rollingPoolUpdate = poolId =>
   confirm({
-    body: _('rollingPoolUpdateMessage'),
+    body: <RollingPoolUpdateModal pool={poolId} />,
     title: _('rollingPoolUpdate'),
     icon: 'pool-rolling-update',
   }).then(
@@ -1362,6 +1411,9 @@ export const deleteSnapshots = vms =>
     body: _('deleteSnapshotsModalMessage', { nVms: vms.length }),
   }).then(() => Promise.all(map(vms, vm => _call('vm.delete', { id: resolveId(vm) }))), noop)
 
+// checkpoint snapshot is in a Suspended state
+export const isCheckpointSnapshot = ({ power_state }) => power_state === 'Suspended'
+
 import MigrateVmModalBody from './migrate-vm-modal' // eslint-disable-line import/first
 export const migrateVm = async (vm, host) => {
   let params
@@ -1634,22 +1686,40 @@ export const importDisks = (disks, sr) =>
   )
 
 import ExportVmModalBody from './export-vm-modal' // eslint-disable-line import/first
-export const exportVm = vm =>
-  confirm({
+export const exportVm = async vm => {
+  const compress = await confirm({
     body: <ExportVmModalBody vm={vm} />,
     icon: 'export',
     title: _('exportVmLabel'),
-  }).then(compress => {
-    const id = resolveId(vm)
-    info(_('startVmExport'), id)
-    return _call('vm.export', { vm: id, compress }).then(({ $getFrom: url }) => {
-      window.open(`.${url}`)
-    })
   })
+  const id = resolveId(vm)
+  const { $getFrom: url } = await _call('vm.export', { vm: id, compress })
+  const fullUrl = window.location.origin + url
+  const copytoClipboard = () => copy(fullUrl)
+  const _info = () => info(_('startVmExport'), id)
+
+  await confirm({
+    body: (
+      <div>
+        <a href={fullUrl} onClick={_info}>
+          {_('downloadVm')}
+        </a>{' '}
+        <ActionButton handler={copytoClipboard} icon='clipboard' tooltip={_('copyExportedUrl')} size='small' />
+        <br />
+        <Icon icon='info' /> <em>{_('vmExportUrlValidity')}</em>
+      </div>
+    ),
+    icon: 'download',
+    title: _('downloadVm'),
+  })
+  _info()
+  window.open(`.${url}`)
+}
 
 export const exportVdi = vdi => {
-  info(_('startVdiExport'), vdi.id)
-  return _call('disk.exportContent', { id: resolveId(vdi) }).then(({ $getFrom: url }) => {
+  const id = resolveId(vdi)
+  info(_('startVdiExport'), id)
+  return _call('disk.exportContent', { id }).then(({ $getFrom: url }) => {
     window.open(`.${url}`)
   })
 }
@@ -2836,6 +2906,33 @@ export const deleteCloudConfigs = ids => {
 
 export const editCloudConfig = (cloudConfig, props) =>
   _call('cloudConfig.update', { ...props, id: resolveId(cloudConfig) })::tap(subscribeCloudConfigs.forceRefresh)
+
+export const subscribeNetworkConfigs = createSubscription(() => _call('cloudConfig.getAllNetworkConfigs'))
+
+export const createNetworkConfig = props =>
+  _call('cloudConfig.createNetworkConfig', props)::tap(subscribeNetworkConfigs.forceRefresh)
+
+export const deleteNetworkConfigs = ids => {
+  const { length } = ids
+  if (length === 0) {
+    return
+  }
+
+  const vars = { nNetworkConfigs: length }
+  return confirm({
+    title: _('confirmDeleteNetworkConfigsTitle', vars),
+    body: <p>{_('confirmDeleteNetworkConfigsBody', vars)}</p>,
+  }).then(
+    () =>
+      Promise.all(ids.map(id => _call('cloudConfig.delete', { id: resolveId(id) })))::tap(
+        subscribeNetworkConfigs.forceRefresh
+      ),
+    noop
+  )
+}
+
+export const editNetworkConfig = (networkConfig, props) =>
+  _call('cloudConfig.update', { ...props, id: resolveId(networkConfig) })::tap(subscribeNetworkConfigs.forceRefresh)
 
 // XO SAN ----------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 import { format } from 'json-rpc-peer'
+import { Ref } from 'xen-api'
 
 // ===================================================================
 
@@ -7,7 +8,9 @@ export async function set({
 
   name_description: nameDescription,
   name_label: nameLabel,
+  backupNetwork,
   migrationNetwork,
+  suspendSr,
 }) {
   pool = this.getXapiObject(pool)
 
@@ -15,6 +18,8 @@ export async function set({
     nameDescription !== undefined && pool.set_name_description(nameDescription),
     nameLabel !== undefined && pool.set_name_label(nameLabel),
     migrationNetwork !== undefined && pool.update_other_config('xo:migrationNetwork', migrationNetwork),
+    backupNetwork !== undefined && pool.update_other_config('xo:backupNetwork', backupNetwork),
+    suspendSr !== undefined && pool.$call('set_suspend_image_SR', suspendSr === null ? Ref.EMPTY : suspendSr._xapiRef),
   ])
 }
 
@@ -30,7 +35,15 @@ set.params = {
     type: 'string',
     optional: true,
   },
+  backupNetwork: {
+    type: ['string', 'null'],
+    optional: true,
+  },
   migrationNetwork: {
+    type: ['string', 'null'],
+    optional: true,
+  },
+  suspendSr: {
     type: ['string', 'null'],
     optional: true,
   },
@@ -38,6 +51,7 @@ set.params = {
 
 set.resolve = {
   pool: ['id', 'pool', 'administrate'],
+  suspendSr: ['suspendSr', 'SR', 'administrate'],
 }
 
 // -------------------------------------------------------------------
