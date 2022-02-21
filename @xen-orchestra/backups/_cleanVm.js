@@ -2,6 +2,7 @@ const assert = require('assert')
 const sum = require('lodash/sum')
 const { asyncMap } = require('@xen-orchestra/async-map')
 const { Constants, mergeVhd, openVhd, VhdAbstract, VhdFile } = require('vhd-lib')
+const { isVhdAlias, resolveVhdAlias } = require('vhd-lib/aliases')
 const { dirname, resolve } = require('path')
 const { DISK_TYPES } = Constants
 const { isMetadataFile, isVhdFile, isXvaFile, isXvaSumFile } = require('./_backupType.js')
@@ -82,7 +83,6 @@ async function mergeVhdChain(chain, { handler, onLog, remove, merge }) {
     )
 
     clearInterval(handle)
-
     await Promise.all([
       VhdAbstract.rename(handler, parent, child),
       asyncMap(children.slice(0, -1), child => {
@@ -103,7 +103,8 @@ const noop = Function.prototype
 const INTERRUPTED_VHDS_REG = /^\.(.+)\.merge.json$/
 const listVhds = async (handler, vmDir) => {
   const vhds = new Set()
-  const interruptedVhds = new Set()
+  const aliases = {}
+  const interruptedVhds = new Map()
 
   await asyncMap(
     await handler.list(`${vmDir}/vdis`, {
@@ -119,21 +120,75 @@ const listVhds = async (handler, vmDir) => {
           const list = await handler.list(vdiDir, {
             filter: file => isVhdFile(file) || INTERRUPTED_VHDS_REG.test(file),
           })
-
+          aliases[vdiDir] = list.filter(vhd => isVhdAlias(vhd)).map(file => `${vdiDir}/${file}`)
           list.forEach(file => {
             const res = INTERRUPTED_VHDS_REG.exec(file)
             if (res === null) {
               vhds.add(`${vdiDir}/${file}`)
             } else {
-              interruptedVhds.add(`${vdiDir}/${res[1]}`)
+              interruptedVhds.set(`${vdiDir}/${res[1]}`, `${vdiDir}/${file}`)
             }
           })
         }
       )
   )
 
-  return { vhds, interruptedVhds }
+  return { vhds, interruptedVhds, aliases }
 }
+
+async function checkAliases(aliasPaths, targetDataRepository, { handler, onLog = noop, remove = false }) {
+  const aliasFound = []
+  for (const path of aliasPaths) {
+    const target = await resolveVhdAlias(handler, path)
+
+    if (!isVhdFile(target)) {
+      onLog(`Alias ${path} references a non vhd target:  ${target}`)
+      if (remove) {
+        await handler.unlink(target)
+        await handler.unlink(path)
+      }
+      continue
+    }
+
+    try {
+      const { dispose } = await openVhd(handler, target)
+      try {
+        await dispose()
+      } catch (e) {
+        // error during dispose should not trigger a deletion
+      }
+    } catch (error) {
+      onLog(`target ${target} of alias ${path} is missing or broken`, { error })
+      if (remove) {
+        try {
+          await VhdAbstract.unlink(handler, path)
+        } catch (e) {
+          if (e.code !== 'ENOENT') {
+            onLog(`Error while deleting target ${target} of alias ${path}`, { error: e })
+          }
+        }
+      }
+      continue
+    }
+
+    aliasFound.push(resolve('/', target))
+  }
+
+  const entries = await handler.list(targetDataRepository, {
+    ignoreMissing: true,
+    prependDir: true,
+  })
+
+  entries.forEach(async entry => {
+    if (!aliasFound.includes(entry)) {
+      onLog(`the Vhd  ${entry} is not referenced by a an alias`)
+      if (remove) {
+        await VhdAbstract.unlink(handler, entry)
+      }
+    }
+  })
+}
+exports.checkAliases = checkAliases
 
 const defaultMergeLimiter = limitConcurrency(1)
 
@@ -149,7 +204,7 @@ exports.cleanVm = async function cleanVm(
   const vhdParents = { __proto__: null }
   const vhdChildren = { __proto__: null }
 
-  const { vhds, interruptedVhds } = await listVhds(handler, vmDir)
+  const { vhds, interruptedVhds, aliases } = await listVhds(handler, vmDir)
 
   // remove broken VHDs
   await asyncMap(vhds, async path => {
@@ -178,7 +233,28 @@ exports.cleanVm = async function cleanVm(
     }
   })
 
-  // @todo : add check for data folder of alias not referenced in a valid alias
+  // remove interrupted merge states for missing VHDs
+  for (const interruptedVhd of interruptedVhds.keys()) {
+    if (!vhds.has(interruptedVhd)) {
+      const statePath = interruptedVhds.get(interruptedVhd)
+      interruptedVhds.delete(interruptedVhd)
+
+      onLog('orphan merge state', {
+        mergeStatePath: statePath,
+        missingVhdPath: interruptedVhd,
+      })
+      if (remove) {
+        onLog(`deleting orphan merge state ${statePath}`)
+        await handler.unlink(statePath)
+      }
+    }
+  }
+
+  // check if alias are correct
+  // check if all vhd in data subfolder have a corresponding alias
+  await asyncMap(Object.keys(aliases), async dir => {
+    await checkAliases(aliases[dir], `${dir}/data`, { handler, onLog, remove })
+  })
 
   // remove VHDs with missing ancestors
   {
@@ -341,9 +417,9 @@ exports.cleanVm = async function cleanVm(
     })
 
     // merge interrupted VHDs
-    interruptedVhds.forEach(parent => {
+    for (const parent of interruptedVhds.keys()) {
       vhdChainsToMerge[parent] = [vhdChildren[parent], parent]
-    })
+    }
 
     Object.values(vhdChainsToMerge).forEach(chain => {
       if (chain !== undefined) {
