@@ -10,8 +10,8 @@
 
 Installation of the [npm package](https://npmjs.org/package/@xen-orchestra/emit-async):
 
-```
-> npm install --save @xen-orchestra/emit-async
+```sh
+npm install --save @xen-orchestra/emit-async
 ```
 
 ## Usage
@@ -32,7 +32,7 @@ ee.on('start', async function () {
   // whatever
 })
 
-// similar to EventEmmiter#emit() but returns a promise which resolves when all
+// similar to EventEmitter#emit() but returns a promise which resolves when all
 // listeners have settled
 await ee.emitAsync('start')
 
@@ -40,7 +40,7 @@ await ee.emitAsync('start')
 // error handling though:
 await ee.emitAsync(
   {
-    onError(error) {
+    onError(error, event, listener) {
       console.warn(error)
     },
   },

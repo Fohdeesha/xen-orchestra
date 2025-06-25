@@ -11,19 +11,19 @@ import React from 'react'
 import StateButton from 'state-button'
 import SortedTable from 'sorted-table'
 import TabButton from 'tab-button'
-import { compact, every, filter, find, forEach, get, map, some, sortedUniq, uniq } from 'lodash'
-import { Sr } from 'render-xo-item'
+import { compact, every, filter, find, forEach, get, map, reduce, some, sortedUniq, uniq } from 'lodash'
+import { Sr, Vdi } from 'render-xo-item'
 import { Container, Row, Col } from 'grid'
 import {
   createCollectionWrapper,
   createGetObjectsOfType,
   createSelector,
+  createFilter,
   createFinder,
   getCheckPermissions,
   getResolvedResourceSet,
   isAdmin,
 } from 'selectors'
-import { injectIntl } from 'react-intl'
 import {
   addSubscriptions,
   connectStore,
@@ -55,8 +55,11 @@ import {
   isVmRunning,
   migrateVdi,
   setBootableVbd,
+  setCbt,
   subscribeResourceSets,
 } from 'xo'
+import { Card, CardHeader, CardBlock } from 'card'
+import { FormattedRelative, injectIntl } from 'react-intl'
 import { SelectResourceSetsSr, SelectSr as SelectAnySr, SelectVdi } from 'select-objects'
 
 const compareSrs = createCompare([isSrShared])
@@ -133,6 +136,11 @@ const COLUMNS_VM_PV = [
     sortCriteria: 'vdi.size',
   },
   {
+    itemRenderer: ({ vdi }) => <Toggle value={vdi.cbt_enabled} onChange={cbt => setCbt(vdi, cbt)} />,
+    name: _('vbdCbt'),
+    sortCriteria: 'vdi.cbt_enabled',
+  },
+  {
     component: VdiSr,
     name: _('vdiSr'),
     sortCriteria: ({ vdiSr }) => vdiSr !== undefined && vdiSr.name_label,
@@ -167,6 +175,55 @@ const COLUMNS_VM_PV = [
 ]
 
 const COLUMNS = filter(COLUMNS_VM_PV, col => col.id !== 'vbdBootableStatus')
+
+const PROGRESS_STYLES = { margin: 0 }
+
+const COLUMNS_VDI_TASKS = [
+  {
+    itemRenderer: task => task.name_label,
+    name: _('name'),
+    sortCriteria: 'name_label',
+  },
+  {
+    itemRenderer: task => <Vdi id={task.details.vdiId} />,
+    name: _('object'),
+    sortCriteria: 'details.vdiName',
+  },
+  {
+    itemRenderer: task => task.details.action,
+    name: _('action'),
+    sortCriteria: 'details.action',
+  },
+  {
+    itemRenderer: task => formatSize(task.details.length),
+    name: _('size'),
+    sortCriteria: 'details.length',
+  },
+  {
+    itemRenderer: task => (
+      <progress style={PROGRESS_STYLES} className='progress' value={task.progress * 100} max='100' />
+    ),
+    name: _('progress'),
+    sortCriteria: 'progress',
+  },
+  {
+    itemRenderer: task => <FormattedRelative value={task.created * 1000} />,
+    name: _('taskStarted'),
+    sortCriteria: 'created',
+  },
+  {
+    itemRenderer: task => {
+      const started = task.created * 1000
+      const { progress } = task
+
+      if (progress === 0 || progress === 1) {
+        return // not yet started or already finished
+      }
+      return <FormattedRelative value={started + (Date.now() - started) / progress} />
+    },
+    name: _('taskEstimatedEnd'),
+  },
+]
 
 const INDIVIDUAL_ACTIONS = [
   ...(process.env.XOA_PLAN > 1
@@ -347,7 +404,7 @@ class AttachDisk extends Component {
   static propTypes = {
     checkSr: PropTypes.func.isRequired,
     onClose: PropTypes.func,
-    vbds: PropTypes.array.isRequired,
+    vbds: PropTypes.object.isRequired,
     vm: PropTypes.object.isRequired,
   }
 
@@ -454,10 +511,39 @@ class AttachDisk extends Component {
 }))
 @connectStore(() => {
   const getAllVbds = createGetObjectsOfType('VBD')
+  const getTasks = createGetObjectsOfType('task')
+
+  const getDetailedImportVdiTasks = createSelector(
+    getTasks,
+    createFilter((state, props) => props.vdis, [vdi => vdi.other_config['xo:import:task'] !== undefined]),
+    createCollectionWrapper((tasks, vdis) =>
+      reduce(
+        vdis,
+        (acc, vdi) => {
+          const task = tasks[vdi.other_config['xo:import:task']]
+          const length = vdi.other_config['xo:import:length']
+
+          acc.push({
+            ...task,
+            details: {
+              action: 'import',
+              length: Number(length),
+              vdiId: vdi.uuid,
+              vdiName: vdi.name_label,
+            },
+          })
+
+          return acc
+        },
+        []
+      )
+    )
+  )
 
   return (state, props) => ({
     allVbds: getAllVbds(state, props),
     checkPermissions: getCheckPermissions(state, props),
+    detailedImportVdiTasks: getDetailedImportVdiTasks(state, props),
     isAdmin: isAdmin(state, props),
     resolvedResourceSet: getResolvedResourceSet(state, props, !props.isAdmin && props.resourceSet !== undefined),
   })
@@ -534,19 +620,6 @@ export default class TabDisks extends Component {
       )
     }, noop)
   }
-
-  _getIsVmAdmin = createSelector(
-    () => this.props.checkPermissions,
-    () => this.props.vm && this.props.vm.id,
-    (check, vmId) => check(vmId, 'administrate')
-  )
-
-  _getAttachDiskPredicate = createSelector(
-    () => this.props.isAdmin,
-    () => this.props.vm.resourceSet,
-    this._getIsVmAdmin,
-    (isAdmin, resourceSet, isVmAdmin) => isAdmin || (resourceSet == null && isVmAdmin)
-  )
 
   _getRequiredHost = createSelector(
     this._areSrsOnSameHost,
@@ -658,14 +731,12 @@ export default class TabDisks extends Component {
               icon='add'
               labelId='vbdCreateDeviceButton'
             />
-            {this._getAttachDiskPredicate() && (
-              <TabButton
-                btnStyle={attachDisk ? 'info' : 'primary'}
-                handler={this._toggleAttachDisk}
-                icon='disk'
-                labelId='vdiAttachDevice'
-              />
-            )}
+            <TabButton
+              btnStyle={attachDisk ? 'info' : 'primary'}
+              handler={this._toggleAttachDisk}
+              icon='disk'
+              labelId='vdiAttachDevice'
+            />
           </Col>
         </Row>
         <Row>
@@ -696,7 +767,9 @@ export default class TabDisks extends Component {
             <SortedTable
               actions={this.actions}
               collection={this._getVbds()}
-              columns={vm.virtualizationMode === 'pv' ? COLUMNS_VM_PV : COLUMNS}
+              columns={
+                vm.virtualizationMode === 'pv' || vm.virtualizationMode === 'pv_in_pvh' ? COLUMNS_VM_PV : COLUMNS
+              }
               data-resourceSet={resolvedResourceSet}
               data-vm={vm}
               individualActions={INDIVIDUAL_ACTIONS}
@@ -708,6 +781,20 @@ export default class TabDisks extends Component {
         <Row>
           <Col mediumSize={5}>
             <IsoDevice vm={vm} />
+          </Col>
+        </Row>
+        <Row className='mt-1'>
+          <Col>
+            <Card>
+              <CardHeader>{_('vdiTasks')}</CardHeader>
+              <CardBlock>
+                <SortedTable
+                  collection={this.props.detailedImportVdiTasks}
+                  columns={COLUMNS_VDI_TASKS}
+                  stateUrlParam='t'
+                />
+              </CardBlock>
+            </Card>
           </Col>
         </Row>
       </Container>

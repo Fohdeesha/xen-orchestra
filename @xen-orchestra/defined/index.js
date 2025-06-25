@@ -1,3 +1,5 @@
+'use strict'
+
 // Usage:
 //
 // ```js
@@ -20,7 +22,7 @@ function defined() {
   }
 
   for (let i = 0; i < n; ++i) {
-    let arg = arguments[i]
+    let arg = args[i]
     if (typeof arg === 'function') {
       arg = get(arg)
     }

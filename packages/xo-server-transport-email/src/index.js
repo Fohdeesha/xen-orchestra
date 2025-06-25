@@ -1,5 +1,5 @@
 import { createTransport } from 'nodemailer'
-import { markdown as nodemailerMarkdown } from 'nodemailer-markdown'
+import { Marked } from 'marked'
 import { promisify } from 'promise-toolbox'
 
 // ===================================================================
@@ -12,8 +12,6 @@ const removeUndefined = obj => {
   })
   return obj
 }
-
-const markdownCompiler = nodemailerMarkdown()
 
 const logAndRethrow = error => {
   console.error('[WARN] plugin transport-email:', (error && error.stack) || error)
@@ -67,6 +65,15 @@ export const configurationSchema = {
             'TLS',
           ],
           description: 'whether the connection should use TLS',
+        },
+        name: {
+          type: 'string',
+          title: 'local hostname',
+          description: `
+hostname of the local machine, used for identifying to the server
+
+This is an advanced setting which should only be used if you encounter issues.
+`.trim(),
         },
         ignoreUnauthorized: {
           type: 'boolean',
@@ -129,6 +136,7 @@ export const testSchema = {
 
 class TransportEmailPlugin {
   constructor({ staticConfig, xo }) {
+    this._marked = new Marked()
     this._staticConfig = staticConfig
     this._xo = xo
     this._unset = null
@@ -159,7 +167,30 @@ class TransportEmailPlugin {
     }
 
     const transport = createTransport({ ...transportConf, ...this._staticConfig.transport }, { from })
-    transport.use('compile', markdownCompiler)
+    transport.use('compile', (mail, cb) => {
+      const data = mail?.data
+      if (data == null || data.markdown == null || (data.html != null && data.text != null)) {
+        return cb()
+      }
+
+      mail.resolveContent(data, 'markdown', (error, markdown) => {
+        if (error != null) {
+          return cb(error)
+        }
+
+        markdown = String(markdown)
+
+        if (data.html == null) {
+          data.html = this._marked.parse(markdown)
+        }
+
+        if (data.text == null) {
+          data.text = markdown
+        }
+
+        cb()
+      })
+    })
 
     this._send = promisify(transport.sendMail, transport)
   }
@@ -178,7 +209,7 @@ class TransportEmailPlugin {
       subject: '[Xen Orchestra] Test of transport-email plugin',
       markdown: `Hi there,
 
-The transport-email plugin for Xen Orchestra server seems to be working fine, nicely done :)
+The \`transport-email\` plugin for *Xen Orchestra* server seems to be working fine, nicely done :)
 `,
       attachments: [
         {
@@ -189,13 +220,14 @@ The transport-email plugin for Xen Orchestra server seems to be working fine, ni
     })
   }
 
-  _sendEmail({ from, to, cc, bcc, subject, markdown, attachments }) {
+  _sendEmail({ from, to, cc, bcc, html, subject, markdown, attachments }) {
     return this._send(
       removeUndefined({
         from,
         to,
         cc,
         bcc,
+        html,
         subject,
         markdown,
         attachments,

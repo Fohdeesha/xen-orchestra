@@ -1,6 +1,6 @@
 import * as CM from 'complex-matcher'
-import getStream from 'get-stream'
 import { fromCallback } from 'promise-toolbox'
+import { getStreamAsBuffer } from 'get-stream'
 import { pipeline } from 'readable-stream'
 
 import createNdJsonStream from '../_createNdJsonStream.mjs'
@@ -15,8 +15,11 @@ clean.permission = 'admin'
 
 // -------------------------------------------------------------------
 
-export async function exportConfig({ entries, passphrase }) {
+export async function exportConfig({ compress, entries, passphrase }) {
   let suffix = '/config.json'
+  if (compress) {
+    suffix += '.gz'
+  }
   if (passphrase !== undefined) {
     suffix += '.enc'
   }
@@ -26,10 +29,9 @@ export async function exportConfig({ entries, passphrase }) {
       (req, res) => {
         res.set({
           'content-disposition': 'attachment',
-          'content-type': 'application/json',
         })
 
-        return this.exportConfig({ entries, passphrase })
+        return this.exportConfig({ compress, entries, passphrase })
       },
       undefined,
       { suffix }
@@ -40,6 +42,7 @@ export async function exportConfig({ entries, passphrase }) {
 exportConfig.permission = 'admin'
 
 exportConfig.params = {
+  compress: { type: 'boolean', default: true },
   entries: { type: 'array', items: { type: 'string' }, optional: true },
   passphrase: { type: 'string', optional: true },
 }
@@ -78,7 +81,7 @@ getAllObjects.params = {
 export async function importConfig({ passphrase }) {
   return {
     $sendTo: await this.registerHttpRequest(async (req, res) => {
-      await this.importConfig(await getStream.buffer(req), { passphrase })
+      await this.importConfig(await getStreamAsBuffer(req), { passphrase })
 
       res.end('config successfully imported')
     }),

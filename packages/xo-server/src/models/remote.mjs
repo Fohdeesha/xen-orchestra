@@ -1,36 +1,29 @@
 import Collection from '../collection/redis.mjs'
-import Model from '../model.mjs'
-import { forEach } from '../utils.mjs'
+import { serializeError } from '../utils.mjs'
 
 import { parseProp } from './utils.mjs'
 
 // ===================================================================
 
-export default class Remote extends Model {}
-
 export class Remotes extends Collection {
-  get Model() {
-    return Remote
+  _serialize(remote) {
+    const { benchmarks } = remote
+    if (benchmarks !== undefined) {
+      remote.benchmarks = JSON.stringify(benchmarks)
+    }
+
+    const { error } = remote
+    if (error !== undefined) {
+      remote.error = JSON.stringify(typeof error === 'object' ? serializeError(error) : error)
+    }
   }
 
-  async get(properties) {
-    const remotes = await super.get(properties)
-    forEach(remotes, remote => {
-      remote.benchmarks = parseProp('remote', remote, 'benchmarks')
-      remote.enabled = remote.enabled === 'true'
-    })
-    return remotes
-  }
+  _unserialize(remote) {
+    remote.benchmarks = parseProp('remote', remote, 'benchmarks')
 
-  _update(remotes) {
-    return super._update(
-      remotes.map(remote => {
-        const { benchmarks } = remote
-        if (benchmarks !== undefined) {
-          remote.benchmarks = JSON.stringify(benchmarks)
-        }
-        return remote
-      })
-    )
+    const { enabled } = remote
+    remote.enabled = typeof enabled === 'boolean' ? enabled : enabled === 'true'
+
+    remote.error = parseProp('remote', remote, 'error', remote.error)
   }
 }

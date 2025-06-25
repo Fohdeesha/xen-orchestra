@@ -41,15 +41,21 @@ import {
 import { addSubscriptions, connectStore, resolveResourceSets } from './utils'
 import {
   isSrWritable,
+  subscribeBackupNgJobs,
   subscribeCloudConfigs,
+  subscribeCloudXoConfigBackups,
   subscribeCurrentUser,
   subscribeGroups,
   subscribeIpPools,
+  subscribeJobs,
+  subscribeMetadataBackupJobs,
+  subscribeMirrorBackupJobs,
   subscribeNetworkConfigs,
   subscribeProxies,
   subscribeRemotes,
   subscribeResourceSets,
   subscribeRoles,
+  subscribeSchedules,
   subscribeUsers,
 } from './xo'
 import { toggleState } from './reaclette-utils'
@@ -66,8 +72,8 @@ const getIds = value =>
   value == null || typeof value === 'string' || isInteger(value)
     ? value
     : Array.isArray(value)
-    ? map(value, getIds)
-    : value.id
+      ? map(value, getIds)
+      : value.id
 
 const getOption = (object, container) => ({
   label: container ? `${getLabel(object)} ${getLabel(container)}` : getLabel(object),
@@ -158,11 +164,11 @@ class GenericSelect extends React.Component {
       return isEmpty(missingObjects)
         ? objects
         : withContainers
-        ? {
-            ...objects,
-            missingObjects,
-          }
-        : [...objects, ...missingObjects]
+          ? {
+              ...objects,
+              missingObjects,
+            }
+          : [...objects, ...missingObjects]
     }
   )
 
@@ -250,6 +256,8 @@ class GenericSelect extends React.Component {
             ? `${option.xoItem.type}-resourceSet`
             : undefined,
         memoryFree: option.xoItem.type === 'host' || undefined,
+        showNetwork: true,
+        ...(this.props.optionProps ?? {}),
       })}
     </span>
   )
@@ -458,7 +466,7 @@ export const SelectHostVm = makeStoreSelect(
 
 export const SelectVmTemplate = makeStoreSelect(
   () => {
-    const getVmTemplatesByPool = createGetObjectsOfType('VM-template').filter(getPredicate).sort().groupBy('$container')
+    const getVmTemplatesByPool = createGetObjectsOfType('VM-template').filter(getPredicate).sort().groupBy('$pool')
     const getPools = createGetObjectsOfType('pool')
       .pick(createSelector(getVmTemplatesByPool, vmTemplatesByPool => keys(vmTemplatesByPool)))
       .sort()
@@ -507,7 +515,7 @@ export const SelectPif = makeStoreSelect(
 
 // ===================================================================
 
-const GenericSelectTag = makeStoreSelect(
+export const GenericSelectTag = makeStoreSelect(
   (_, props) => ({
     xoObjects: createSelector(
       createGetTags('objects' in props ? (_, props) => props.objects : undefined)
@@ -661,7 +669,7 @@ export const SelectSubject = makeSubscriptionSelect(
     const set = newSubjects => {
       subjects = newSubjects
       /* We must wait for groups AND users options to be loaded,
-       * or a previously setted value belonging to one type or another might be discarded
+       * or a previously set value belonging to one type or another might be discarded
        * by the internal <GenericSelect>
        */
       if (usersLoaded && groupsLoaded) {
@@ -687,6 +695,19 @@ export const SelectSubject = makeSubscriptionSelect(
     }
   },
   { placeholder: _('selectSubjects') }
+)
+
+export const SelectUser = makeSubscriptionSelect(
+  subscriber => {
+    const unsubscribeUsers = subscribeUsers(users => {
+      subscriber({
+        xoObjects: users,
+      })
+    })
+
+    return unsubscribeUsers
+  },
+  { placeholder: _('selectUser') }
 )
 
 // ===================================================================
@@ -1076,4 +1097,76 @@ export const SelectNetworkConfig = makeSubscriptionSelect(
       })
     }),
   { placeholder: _('selectNetworkConfigs') }
+)
+
+// ===================================================================
+
+export const SelectXoCloudConfig = makeSubscriptionSelect(
+  subscriber =>
+    subscribeCloudXoConfigBackups(configs => {
+      const xoObjects = groupBy(
+        map(configs, config => ({ ...config, type: 'xoConfig' }))
+          // from newest to oldest
+          .sort((a, b) => b.createdAt - a.createdAt),
+        'xoaId'
+      )
+      subscriber({
+        xoObjects,
+        xoContainers: map(xoObjects, (configs, id) => ({ ...configs, id, type: 'VM' })),
+      })
+    }),
+  { placeholder: _('selectXoConfig') }
+)
+
+// ===================================================================
+
+export const SelectSchedule = makeSubscriptionSelect(
+  subscriber => {
+    let schedules, jobs, backupJobs, mirrorJobs, metadataJobs
+    const updateData = () => {
+      if (
+        schedules !== undefined &&
+        jobs !== undefined &&
+        backupJobs !== undefined &&
+        mirrorJobs !== undefined &&
+        metadataJobs !== undefined
+      ) {
+        // everything is loaded
+        subscriber({
+          xoObjects: groupBy(schedules, 'jobId'),
+          xoContainers: [...jobs, ...backupJobs, ...mirrorJobs, ...metadataJobs],
+        })
+      }
+    }
+    const unsubscribeSchedules = subscribeSchedules(_schedules => {
+      schedules = _schedules.map(schedule => ({ ...schedule, type: 'schedule' }))
+      updateData()
+    })
+
+    const unsubscribeJobs = subscribeJobs(_jobs => {
+      jobs = _jobs.map(_job => ({ ..._job, type: 'job' }))
+      updateData()
+    })
+    const unsubscribeBackupJobs = subscribeBackupNgJobs(_jobs => {
+      backupJobs = _jobs.map(_job => ({ ..._job, type: 'job' }))
+      updateData()
+    })
+    const unsubscribeMirrorBackupJobs = subscribeMirrorBackupJobs(_jobs => {
+      mirrorJobs = _jobs.map(_job => ({ ..._job, type: 'job' }))
+      updateData()
+    })
+    const unsubscribeMetadataJobs = subscribeMetadataBackupJobs(_jobs => {
+      metadataJobs = _jobs.map(_job => ({ ..._job, type: 'job' }))
+      updateData()
+    })
+
+    return () => {
+      unsubscribeSchedules()
+      unsubscribeJobs()
+      unsubscribeBackupJobs()
+      unsubscribeMirrorBackupJobs()
+      unsubscribeMetadataJobs()
+    }
+  },
+  { placeholder: _('selectSchedule') }
 )

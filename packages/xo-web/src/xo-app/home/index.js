@@ -48,7 +48,6 @@ import {
   disconnectAllHostsSrs,
   emergencyShutdownHosts,
   forgetSrs,
-  isSrShared,
   migrateVms,
   pauseVms,
   reconnectAllHostsSrs,
@@ -222,6 +221,15 @@ const OPTIONS = {
       {
         labelId: 'homeSortByStartTime',
         sortBy: 'startTime',
+
+        // move VM with no start time at the end
+        sortByFn: ({ startTime }) => (startTime === null ? -Infinity : startTime),
+        sortOrder: 'desc',
+      },
+      {
+        labelId: 'homeSortByInstallTime',
+        sortBy: 'installTime',
+        sortByFn: ({ installTime }) => (installTime === null ? -Infinity : installTime),
         sortOrder: 'desc',
       },
     ],
@@ -288,7 +296,7 @@ const OPTIONS = {
         sortOrder: 'desc',
         default: true,
       },
-      { labelId: 'homeSortByShared', sortBy: isSrShared, sortOrder: 'desc' },
+      { labelId: 'homeSortByShared', sortBy: 'shared', sortOrder: 'desc' },
       {
         labelId: 'homeSortByUsage',
         sortBy: 'physicalUsageBySize',
@@ -366,7 +374,7 @@ class NoObjectsWithoutServers extends Component {
               <Row>
                 <Col mediumSize={6}>
                   <a
-                    href='https://xen-orchestra.com/docs/'
+                    href='https://docs.xen-orchestra.com/'
                     rel='noopener noreferrer'
                     target='_blank'
                     className='btn btn-link'
@@ -452,11 +460,19 @@ const NoObjects = props =>
     (hosts, pools) => ({ ...hosts, ...pools })
   )
   const getItems = createSelector(getContainers, createGetObjectsOfType(getType), (containers, items) =>
-    mapValues(items, item => ({
-      ...item,
-      container: containers[item.$container || item.$pool],
-      physicalUsageBySize: item.type === 'SR' ? (item.size > 0 ? item.physical_usage / item.size : 0) : undefined,
-    }))
+    mapValues(items, item =>
+      // ComplexMatcher works on own enumerable properties, therefore the
+      // injected properties should be non-enumerable
+      Object.defineProperties(
+        { ...item },
+        {
+          container: { value: containers[item.$container || item.$pool] },
+          physicalUsageBySize: {
+            value: item.type === 'SR' ? (item.size > 0 ? item.physical_usage / item.size : 0) : undefined,
+          },
+        }
+      )
+    )
   )
   // VMs are handled separately because we need to inject their 'vdisUsage'
   const getVms = createSelector(
@@ -464,12 +480,30 @@ const NoObjects = props =>
     createGetObjectsOfType('VM'),
     createGetObjectsOfType('VBD'),
     createGetObjectsOfType('VDI'),
-    (containers, vms, vbds, vdis) =>
-      mapValues(vms, vm => ({
-        ...vm,
-        container: containers[vm.$container || vm.$pool],
-        vdisUsage: sumBy(compact(map(vm.$VBDs, vbdId => get(() => vdis[vbds[vbdId].VDI]))), 'usage'),
-      }))
+    createGetObjectsOfType('VIF'),
+    (containers, vms, vbds, vdis, vifs) =>
+      mapValues(vms, vm =>
+        // ComplexMatcher works on own enumerable properties, therefore the
+        // injected properties should be non-enumerable
+        Object.defineProperties(
+          {
+            ...vm,
+
+            MACs: vm.VIFs.reduce((acc, vifId) => {
+              const vif = vifs[vifId]
+              if (vif !== undefined) {
+                acc.push(vif.MAC)
+              }
+              return acc
+            }, []),
+            vulnerable: Object.values(vm.vulnerabilities).filter(Boolean).length > 0,
+          },
+          {
+            container: { value: containers[vm.$container || vm.$pool] },
+            vdisUsage: { value: sumBy(compact(map(vm.$VBDs, vbdId => get(() => vdis[vbds[vbdId].VDI]))), 'usage') },
+          }
+        )
+      )
   )
 
   return (state, props) => {
@@ -541,6 +575,11 @@ export default class Home extends Component {
   _setNItemsPerPage(nItems) {
     this.setState({ homeItemsPerPage: nItems })
     cookies.set('homeItemsPerPage', nItems)
+
+    // changing the number of items per page should send back to the first page
+    //
+    // see https://github.com/vatesfr/xen-orchestra/issues/7350
+    this._onPageSelection(1)
   }
 
   _getPage() {
@@ -722,7 +761,12 @@ export default class Home extends Component {
     ),
     createSelector(
       () => this.state.sortBy,
-      sortBy => [sortBy, 'name_label']
+      sortBy => {
+        const { sortOptions } = OPTIONS[this.props.type]
+        const sort = find(sortOptions, { sortBy })
+
+        return [(sort && sort.sortByFn) || sortBy, 'name_label']
+      }
     ),
     () => this.state.sortOrder
   )
@@ -798,7 +842,7 @@ export default class Home extends Component {
         ? ComplexMatcher.setPropertyClause(
             filter,
             'tags',
-            new ComplexMatcher.Or(map(tags, tag => new ComplexMatcher.RegExp(`^${escapeRegExp(tag.id)}$`, 'i')))
+            new ComplexMatcher.Or(map(tags, tag => new ComplexMatcher.RegExp(`^${escapeRegExp(tag.id)}$`)))
           )
         : ComplexMatcher.setPropertyClause(filter, 'tags', undefined)
     )

@@ -23,6 +23,7 @@ const jsonStringify = json => JSON.stringify(json, null, 2)
 const logger = createLogger('report-bug-button')
 
 const GITHUB_URL = 'https://github.com/vatesfr/xen-orchestra/issues/new'
+const GITHUB_BUG_TEMPLATE = 'bug_report.yml'
 const XO_SUPPORT_URL = 'https://xen-orchestra.com/#!/member/support'
 const SUPPORT_PANEL_URL = './api/support/create/ticket'
 
@@ -43,8 +44,17 @@ const ADDITIONAL_FILES = [
 
 const reportInNewWindow = (url, { title, message, formatMessage = identity }) => {
   const encodedTitle = encodeURIComponent(title == null ? '' : title)
-  const encodedMessage = encodeURIComponent(message == null ? '' : formatMessage(message))
-  window.open(`${url}?title=${encodedTitle}&body=${encodedMessage}`)
+
+  let _url = `${url}?title=${encodedTitle}`
+
+  if (url === GITHUB_URL) {
+    const encodedErrorMessage = encodeURIComponent(jsonStringify(message.error))
+    const encodedLabels = encodeURIComponent('type: bug :bug:,status: triaging :triangular_flag_on_post:')
+
+    _url += `&template=${GITHUB_BUG_TEMPLATE}&labels=${encodedLabels}&error-message=${encodedErrorMessage}`
+  }
+
+  window.open(_url)
 }
 
 export const reportOnSupportPanel = async ({ files = [], formatMessage = identity, message, title } = {}) => {
@@ -65,7 +75,7 @@ export const reportOnSupportPanel = async ({ files = [], formatMessage = identit
     ADDITIONAL_FILES.map(({ fetch, name }) =>
       timeout.call(fetch(), ADDITIONAL_FILES_FETCH_TIMEOUT).then(
         file => formData.append('attachments', createBlobFromString(file), name),
-        error => logger.warn(`cannot get ${name}`, error)
+        error => logger.warn(`cannot get ${name}`, { error })
       )
     )
   )

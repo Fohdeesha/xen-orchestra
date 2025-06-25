@@ -3,7 +3,7 @@ import PropTypes from 'prop-types'
 import React, { Component } from 'react'
 import { connect } from 'react-redux'
 import { FormattedMessage, IntlProvider as IntlProvider_ } from 'react-intl'
-import { every } from 'lodash'
+import every from 'lodash/every.js'
 
 import locales from './locales'
 import messages from './messages'
@@ -62,7 +62,7 @@ export class IntlProvider extends Component {
 
   render() {
     const { lang, children } = this.props
-    // Adding a key prop is a work-around suggested by react-intl documentation
+    // Adding a key prop is a workaround suggested by react-intl documentation
     // to make sure changes to the locale trigger a re-render of the child components
     // https://github.com/yahoo/react-intl/wiki/Components#dynamic-language-selection
     //

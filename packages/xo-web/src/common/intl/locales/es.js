@@ -137,9 +137,6 @@ export default {
   // Original text: 'IPs'
   settingsIpsPage: undefined,
 
-  // Original text: 'Config'
-  settingsConfigPage: undefined,
-
   // Original text: "About"
   aboutPage: 'Acerca de',
 
@@ -242,10 +239,10 @@ export default {
   // Original text: "Welcome on Xen Orchestra!"
   homeWelcome: '¡Bienvenido a Xen Orchestra!',
 
-  // Original text: "Add your XenServer hosts or pools"
+  // Original text: "Add your XCP-ng hosts or pools"
   homeWelcomeText: 'Añade tus hosts/pools de XenServer',
 
-  // Original text: 'Some XenServers have been registered but are not connected'
+  // Original text: 'Some XCP-ng hosts have been registered but are not connected'
   homeConnectServerText: undefined,
 
   // Original text: "Want some help?"
@@ -1544,9 +1541,6 @@ export default {
   // Original text: 'Invalid parameters'
   configIpErrorTitle: undefined,
 
-  // Original text: 'IP address and netmask required'
-  configIpErrorMessage: undefined,
-
   // Original text: 'Static IP address'
   staticIp: undefined,
 
@@ -2598,8 +2592,8 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: 'al SR:',
 
-  // Original text: "VMs to import"
-  vmsToImport: 'VMs para importar',
+  // Original text: "VM{nVms, plural, one {} other {s}} to import"
+  vmsToImport: 'VM{nVms, plural, one {} other {s}} para importar',
 
   // Original text: "Reset"
   importVmsCleanList: 'Reiniciar',
@@ -2616,7 +2610,7 @@ export default {
   // Original text: "Export starting…"
   startVmExport: 'Comenzando export…',
 
-  // Original text: 'N CPUs'
+  // Original text: 'Number of CPUs'
   nCpus: undefined,
 
   // Original text: 'Memory'
@@ -2675,9 +2669,6 @@ export default {
 
   // Original text: 'Click on a VM to display restore options'
   restoreBackupsInfo: undefined,
-
-  // Original text: 'Only the files of Delta Backup which are not on a SMB remote can be restored'
-  restoreDeltaBackupsInfo: undefined,
 
   // Original text: "Enabled"
   remoteEnabled: 'activado',
@@ -3190,12 +3181,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'Xen Orchestra',
 
-  // Original text: "Xen Orchestra server"
-  xenOrchestraServer: 'servidor',
-
-  // Original text: "Xen Orchestra web client"
-  xenOrchestraWeb: 'cliente web',
-
   // Original text: "No pro support provided!"
   noProSupport: '¡Sin soporte Pro!',
 
@@ -3310,9 +3295,9 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: 'No hay actualizador para la Edición Community',
 
-  // Original text: "Please consider subscribe and try it with all features for free during 15 days on {link}.""
+  // Original text: "Please consider subscribe and try it with all features for free during 30 days on {link}.""
   considerSubscribe:
-    'Por favor plantéate la suscripción y pruébala con todas las características gratis durante 15 días {link}',
+    'Por favor plantéate la suscripción y pruébala con todas las características gratis durante 30 días {link}',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning:

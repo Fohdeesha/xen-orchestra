@@ -11,12 +11,12 @@ const logger = createLogger('xo:xo-server-auth-ldap')
 
 // ===================================================================
 
-const DEFAULTS = {
-  checkCertificate: true,
-  filter: '(uid={{name}})',
-}
-
 const { escape } = Filter.prototype
+
+function isDnField(field) {
+  const normalized = field.toLowerCase().trim()
+  return normalized === 'dn' || normalized === 'distinguishedname'
+}
 
 const VAR_RE = /\{\{([^}]+)\}\}/g
 const evalFilter = (filter, vars) =>
@@ -55,7 +55,7 @@ If not specified, it will use a default set of well-known CAs.
       description:
         "Enforce the validity of the server's certificates. You can disable it when connecting to servers that use a self-signed certificate.",
       type: 'boolean',
-      default: DEFAULTS.checkCertificate,
+      default: true,
     },
     startTls: {
       title: 'Use StartTLS',
@@ -110,7 +110,7 @@ Or something like this if you also want to filter by group:
 - \`(&(sAMAccountName={{name}})(memberOf=<group DN>))\`
 `.trim(),
       type: 'string',
-      default: DEFAULTS.filter,
+      default: '(uid={{name}})',
     },
     userIdAttribute: {
       title: 'ID attribute',
@@ -164,7 +164,7 @@ Or something like this if you also want to filter by group:
       required: ['base', 'filter', 'idAttribute', 'displayNameAttribute', 'membersMapping'],
     },
   },
-  required: ['uri', 'base'],
+  required: ['uri', 'base', 'userIdAttribute'],
 }
 
 export const testSchema = {
@@ -198,7 +198,7 @@ class AuthLdap {
     })
 
     {
-      const { checkCertificate = DEFAULTS.checkCertificate, certificateAuthorities } = conf
+      const { checkCertificate, certificateAuthorities } = conf
 
       const tlsOptions = (this._tlsOptions = {})
 
@@ -212,15 +212,7 @@ class AuthLdap {
       }
     }
 
-    const {
-      bind: credentials,
-      base: searchBase,
-      filter: searchFilter = DEFAULTS.filter,
-      startTls = false,
-      groups,
-      uri,
-      userIdAttribute,
-    } = conf
+    const { bind: credentials, base: searchBase, filter: searchFilter, startTls, groups, uri, userIdAttribute } = conf
 
     this._credentials = credentials
     this._serverUri = uri
@@ -303,23 +295,21 @@ class AuthLdap {
             return
           }
 
-          let user
-          if (this._userIdAttribute === undefined) {
-            // Support legacy config
-            user = await this._xo.registerUser(undefined, username)
-          } else {
-            const ldapId = entry[this._userIdAttribute]
-            user = await this._xo.registerUser2('ldap', {
-              user: { id: ldapId, name: username },
-            })
+          const ldapId = entry[this._userIdAttribute]
+          if (ldapId === undefined) {
+            throw new Error(`could not find field ${this._userIdAttribute} on user ${username}`)
+          }
 
-            const groupsConfig = this._groupsConfig
-            if (groupsConfig !== undefined) {
-              try {
-                await this._synchronizeGroups(user, entry[groupsConfig.membersMapping.userAttribute])
-              } catch (error) {
-                logger.error(`failed to synchronize groups: ${error.message}`)
-              }
+          const user = await this._xo.registerUser2('ldap', {
+            user: { id: ldapId, name: username },
+          })
+
+          const groupsConfig = this._groupsConfig
+          if (groupsConfig !== undefined) {
+            try {
+              await this._synchronizeGroups(user, entry[groupsConfig.membersMapping.userAttribute])
+            } catch (error) {
+              logger.error(`failed to synchronize groups: ${error.message}`)
             }
           }
 
@@ -420,26 +410,41 @@ class AuthLdap {
 
         const xoGroupMembers = xoGroup.users === undefined ? [] : xoGroup.users.slice(0)
 
+        const { userAttribute } = membersMapping
+        const search = isDnField(userAttribute)
+          ? memberId => client.search(memberId, { scope: 'base' })
+          : memberId =>
+              client.search(this._searchBase, {
+                scope: 'sub',
+                filter: `(${escape(userAttribute)}=${escape(memberId)})`,
+                sizeLimit: 1,
+              })
         for (const memberId of ldapGroupMembers) {
           const {
             searchEntries: [ldapUser],
-          } = await client.search(this._searchBase, {
-            scope: 'sub',
-            filter: `(${escape(membersMapping.userAttribute)}=${escape(memberId)})`,
-            sizeLimit: 1,
-          })
+          } = await search(memberId)
+
           if (ldapUser === undefined) {
+            logger.error(
+              `LDAP user ${memberId} belongs to group ${groupLdapName} but could not be found by searching ${userAttribute}=${memberId} in ${this._searchBase}`
+            )
             continue
           }
 
           const xoUser = xoUsers.find(user => user.authProviders.ldap.id === ldapUser[this._userIdAttribute])
           if (xoUser === undefined) {
+            logger.debug(
+              `LDAP user ${ldapUser[this._userIdAttribute]} belongs to group ${groupLdapName} but the corresponding XO user could not be found`
+            )
             continue
           }
           // If the user exists in XO, should be a member of the LDAP-provided
           // group but isn't: add it
           const userIdIndex = xoGroupMembers.findIndex(id => id === xoUser.id)
           if (userIdIndex !== -1) {
+            logger.debug(
+              `LDAP user ${ldapUser[this._userIdAttribute]} belongs to group ${groupLdapName} and is already a member of the corresponding XO group ${xoGroup.name}`
+            )
             xoGroupMembers.splice(userIdIndex, 1)
             continue
           }

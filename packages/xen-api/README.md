@@ -10,8 +10,8 @@
 
 Installation of the [npm package](https://npmjs.org/package/xen-api):
 
-```
-> npm install --save xen-api
+```sh
+npm install --save xen-api
 ```
 
 ## Usage
@@ -72,7 +72,7 @@ Custom fields on objects (hidden − ie. non enumerable):
 
 - `$type`: the type of the object (`VM`, `task`, …);
 - `$ref`: the (opaque) reference of the object;
-- `$id`: the identifier of this object (its UUID if any, otherwise its reference);
+- `$id`: the identifier of this object (its UUID if any; otherwise, its reference);
 - `$pool`: the pool object this object belongs to.
 
 Furthermore, any field containing a reference (or references if an
@@ -82,6 +82,43 @@ array) can be resolved by prepending the field name with a `$`:
 console.log(xapi.pool.$master.$resident_VMs[0].name_label)
 // vm1
 ```
+
+#### Calling a XAPI method
+
+For very fast methods, use `call(method, ...args)`:
+
+```js
+const nameLabel = await xapi.call('VM.get_name_label', vmRef)
+```
+
+For methods that could take some time (doing an action, etc.), use `callAsync(method, ...args)`, it will automatically call the asynchronous variant of the method and monitor the associated task:
+
+```js
+const snapshotRef = await xapi.callAsync('VM.snapshot', vmRef, 'My snapshot')
+```
+
+Both `call()` and `callAsync()` accepts an optional `Map`-like object as a first parameter to use as a cache:
+
+```js
+// to avoid leaking memory, make sure to not keep entries forever
+//
+// see:
+// - https://www.npmjs.com/package/@isaacs/ttlcache
+// - https://www.npmjs.com/package/lru-cache
+const cache = new Map()
+
+// the first time, the call is really executed
+console.log(await xapi.call(cache, 'VM.get_name_label', vmRef))
+
+// next times, the value of the cache is directly returned
+console.log(await xapi.call(cache, 'VM.get_name_label', vmRef))
+
+// to delete the entry from the cache, simply compute the key
+const key = xapi.computeCacheKey('VM.get_name_label', vmRef)
+cache.delete(key)
+```
+
+> Note: Failures are not cached.
 
 ### CLI
 
@@ -112,6 +149,30 @@ To ease searches, `find()` and `findAll()` functions are available:
 root@xen1.company.net> findAll({ $type: 'VM' }).length
 183
 ```
+
+To get a record from the local cache:
+
+```
+root@xen1.company.net> vm = getObject('17ccab66-9cc0-90a4-71a5-95874f9ad5e0')
+
+root@xen1.company.net> vm.name_label
+'My VM'
+
+root@xen1.company.net> vm.$ref
+'OpaqueRef:9a533a13-64bf-4755-ad6a-9b0f67d686ca'
+```
+
+To call a XAPI method:
+
+```
+root@xen1.company.net> call('VM.start', 'OpaqueRef:9a533a13-64bf-4755-ad6a-9b0f67d686ca', false, false)
+''
+
+root@xen1.company.net> vm.$call('start', false, false)
+''
+```
+
+To call a XAPI method
 
 ## Contributions
 

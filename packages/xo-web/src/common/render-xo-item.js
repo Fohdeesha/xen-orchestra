@@ -1,18 +1,29 @@
+import * as CM from 'complex-matcher'
 import _ from 'intl'
 import CopyToClipboard from 'react-copy-to-clipboard'
 import PropTypes from 'prop-types'
 import React from 'react'
 import { get } from '@xen-orchestra/defined'
-import { find } from 'lodash'
+import { injectState, provideState } from 'reaclette'
+import find from 'lodash/find.js'
+import isEmpty from 'lodash/isEmpty.js'
 
 import decorate from './apply-decorators'
 import Icon from './icon'
 import Link from './link'
 import Tooltip from './tooltip'
-import { addSubscriptions, connectStore, formatSize } from './utils'
+import { addSubscriptions, connectStore, formatSize, NumericDate, ShortDate } from './utils'
 import { createGetObject, createSelector } from './selectors'
-import { FormattedDate } from 'react-intl'
-import { isSrWritable, subscribeBackupNgJobs, subscribeProxies, subscribeRemotes, subscribeUsers } from './xo'
+import {
+  isSrWritable,
+  subscribeBackupNgJobs,
+  subscribeMetadataBackupJobs,
+  subscribeProxies,
+  subscribeRemotes,
+  subscribeSchedules,
+  subscribeUsers,
+  subscribeMirrorBackupJobs,
+} from './xo'
 
 // ===================================================================
 
@@ -101,7 +112,7 @@ export const Host = decorate([
             {_('memoryFree', {
               memoryFree: formatSize(host.memory.size - host.memory.usage),
             })}
-            {')'}
+            )
           </span>
         )}
         {pool !== undefined && <span>{` - ${pool.name_label}`}</span>}
@@ -142,7 +153,8 @@ export const Vm = decorate([
 
     return (
       <LinkWrapper link={link} newTab={newTab} to={`/vms/${vm.id}`}>
-        <Icon icon={`vm-${vm.power_state.toLowerCase()}`} /> {vm.name_label}
+        <Icon icon={isEmpty(vm.current_operations) ? `vm-${vm.power_state.toLowerCase()}` : 'vm-busy'} />{' '}
+        {vm.name_label}
         {container !== undefined && ` (${container.name_label})`}
       </LinkWrapper>
     )
@@ -216,9 +228,9 @@ export const Sr = decorate([
       container: getContainer(state, props),
     })
   }),
-  ({ id, sr, container, link, newTab, spaceLeft, self }) => {
+  ({ id, sr, container, link, newTab, spaceLeft, self, name }) => {
     if (sr === undefined) {
-      return unknowItem(id, 'SR')
+      return unknowItem(id, 'SR', name)
     }
 
     return (
@@ -240,6 +252,7 @@ Sr.propTypes = {
   container: PropTypes.bool,
   id: PropTypes.string.isRequired,
   link: PropTypes.bool,
+  name: PropTypes.string,
   newTab: PropTypes.bool,
   self: PropTypes.bool,
   spaceLeft: PropTypes.bool,
@@ -293,6 +306,63 @@ Vdi.defaultProps = {
   self: false,
   showSize: false,
   showSr: false,
+}
+
+// ===================================================================
+
+export const Pif = decorate([
+  connectStore(() => {
+    const getObject = createGetObject()
+    const getNetwork = createGetObject(createSelector(getObject, pif => get(() => pif.$network)))
+
+    // FIXME: props.self ugly workaround to get object as a self user
+    return (state, props) => ({
+      pif: getObject(state, props, props.self),
+      network: getNetwork(state, props),
+    })
+  }),
+  ({ id, showNetwork, pif, network }) => {
+    if (pif === undefined) {
+      return unknowItem(id, 'PIF')
+    }
+
+    const { carrier, device, deviceName, vlan } = pif
+    const showExtraInfo = deviceName || vlan !== -1 || (showNetwork && network !== undefined)
+
+    return (
+      <span>
+        <Icon icon='network' color={carrier ? 'text-success' : 'text-danger'} /> {device}
+        {showExtraInfo && (
+          <span>
+            {' '}
+            ({deviceName}
+            {vlan !== -1 && (
+              <span>
+                {' '}
+                -{' '}
+                {_('keyValue', {
+                  key: _('pifVlanLabel'),
+                  value: vlan,
+                })}
+              </span>
+            )}
+            {showNetwork && network !== undefined && <span> - {network.name_label}</span>})
+          </span>
+        )}
+      </span>
+    )
+  },
+])
+
+Pif.propTypes = {
+  id: PropTypes.string.isRequired,
+  self: PropTypes.bool,
+  showNetwork: PropTypes.bool,
+}
+
+Pif.defaultProps = {
+  self: false,
+  showNetwork: false,
 }
 
 // ===================================================================
@@ -375,7 +445,7 @@ export const Proxy = decorate([
         to={{
           pathname: '/proxies',
           query: {
-            s: `id:${id}`,
+            s: new CM.Property('id', new CM.String(id)).toString(),
           },
         }}
       >
@@ -409,7 +479,11 @@ export const BackupJob = decorate([
     }
 
     return (
-      <LinkWrapper link={link} newTab={newTab} to={`/backup/overview?s=id:${id}`}>
+      <LinkWrapper
+        link={link}
+        newTab={newTab}
+        to={`/backup/overview?s=${encodeURIComponent(new CM.Property('id', new CM.String(id)).toString())}`}
+      >
         {job.name}
       </LinkWrapper>
     )
@@ -425,6 +499,62 @@ BackupJob.propTypes = {
 BackupJob.defaultProps = {
   link: false,
   newTab: false,
+}
+
+// ===================================================================
+
+export const Schedule = decorate([
+  addSubscriptions(({ id }) => ({
+    schedule: cb => subscribeSchedules(schedules => cb(schedules.find(schedule => schedule.id === id))),
+    backupJobs: subscribeBackupNgJobs,
+    metadataBackupJobs: subscribeMetadataBackupJobs,
+    mirrorBackupJobs: subscribeMirrorBackupJobs,
+  })),
+  provideState({
+    initialState: () => ({}),
+    computed: {
+      job: (_, { backupJobs = [], metadataBackupJobs = [], mirrorBackupJobs = [], schedule }) =>
+        schedule && [...backupJobs, ...metadataBackupJobs, ...mirrorBackupJobs].find(job => job.id === schedule.jobId),
+    },
+  }),
+  injectState,
+  ({ id, schedule, showJob, showState, state: { job } }) => {
+    if (schedule === undefined) {
+      return unknowItem(id, 'schedule')
+    }
+
+    const isEnabled = schedule.enabled
+    const scheduleName = (schedule.name ?? '').trim()
+    const jobName = (job?.name ?? '').trim()
+
+    return (
+      <span>
+        {showState && (
+          <span className={`mr-1 tag tag-${isEnabled ? 'success' : 'danger'}`}>
+            {isEnabled ? _('stateEnabled') : _('stateDisabled')}
+          </span>
+        )}
+        <span>{scheduleName === '' ? <em>{_('unnamedSchedule')}</em> : scheduleName}</span>
+        {showJob && (
+          <span>
+            {' '}
+            ({job ? jobName === '' ? <em>{_('unnamedJob')}</em> : jobName : unknowItem(schedule.jobId, 'job')})
+          </span>
+        )}
+      </span>
+    )
+  },
+])
+
+Schedule.propTypes = {
+  id: PropTypes.string.isRequired,
+  showState: PropTypes.bool,
+  showJob: PropTypes.bool,
+}
+
+Schedule.defaultProps = {
+  showState: true,
+  showJob: true,
 }
 
 // ===================================================================
@@ -459,7 +589,11 @@ export const User = decorate([
       return defaultRender || unknowItem(id, 'user')
     }
     return (
-      <LinkWrapper link={link} newTab={newTab} to={`/settings/users?s=id:${id}`}>
+      <LinkWrapper
+        link={link}
+        newTab={newTab}
+        to={`/settings/users?s=${encodeURIComponent(new CM.Property('id', new CM.String(id)).toString())}`}
+      >
         <Icon icon='user' /> {user.email}
       </LinkWrapper>
     )
@@ -477,6 +611,19 @@ User.defaultProps = {
   link: false,
   newTab: false,
 }
+
+// ===================================================================
+
+export const Pci = decorate([
+  connectStore(() => ({
+    pci: createGetObject(),
+  })),
+  ({ pci }) => (
+    <span>
+      {pci.class_name} {pci.device_name} ({pci.pci_id})
+    </span>
+  ),
+])
 
 // ===================================================================
 
@@ -519,39 +666,39 @@ const xoItemToRender = {
     }
     return <span>{label}</span>
   },
-
+  xoConfig: ({ createdAt }) => (
+    <span>
+      <Icon icon='xo-cloud-config' /> <ShortDate timestamp={createdAt} />
+    </span>
+  ),
   // XO objects.
-  pool: ({ id }) => <Pool id={id} />,
+  pool: props => <Pool {...props} />,
 
-  VDI: ({ id }) => <Vdi id={id} showSr />,
-  'VDI-resourceSet': ({ id }) => <Vdi id={id} self showSr />,
+  VDI: props => <Vdi {...props} showSr />,
+  'VDI-resourceSet': props => <Vdi {...props} self showSr />,
 
   // Pool objects.
-  'VM-template': ({ id }) => <VmTemplate id={id} />,
-  'VM-template-resourceSet': ({ id }) => <VmTemplate id={id} self />,
-  host: ({ id, memoryFree }) => <Host id={id} memoryFree={memoryFree} />,
-  network: ({ id }) => <Network id={id} />,
-  'network-resourceSet': ({ id }) => <Network id={id} self />,
+  'VM-template': props => <VmTemplate {...props} />,
+  'VM-template-resourceSet': props => <VmTemplate {...props} self />,
+  host: props => <Host {...props} />,
+  network: props => <Network {...props} />,
+  'network-resourceSet': props => <Network {...props} self />,
 
   // SR.
-  SR: ({ id }) => <Sr id={id} />,
-  'SR-resourceSet': ({ id }) => <Sr id={id} self />,
+  SR: props => <Sr {...props} />,
+  'SR-resourceSet': props => <Sr {...props} self />,
 
   // VM.
-  VM: ({ id }) => <Vm id={id} />,
-  'VM-snapshot': ({ id }) => <Vm id={id} />,
-  'VM-controller': ({ id }) => (
+  VM: props => <Vm {...props} />,
+  'VM-snapshot': props => <Vm {...props} />,
+  'VM-controller': props => (
     <span>
-      <Icon icon='host' /> <Vm id={id} />
+      <Icon icon='host' /> <Vm {...props} />
     </span>
   ),
 
   // PIF.
-  PIF: pif => (
-    <span>
-      <Icon icon='network' color={pif.carrier ? 'text-success' : 'text-danger'} /> {pif.device} ({pif.deviceName})
-    </span>
-  ),
+  PIF: props => <Pif {...props} />,
 
   // Tags.
   tag: tag => (
@@ -577,21 +724,35 @@ const xoItemToRender = {
   backup: backup => (
     <span>
       <span className='tag tag-info' style={{ textTransform: 'capitalize' }}>
-        {backup.mode}
+        {backup.mode === 'delta' ? _('backupIsIncremental') : backup.mode}
       </span>{' '}
+      {backup.isImmutable && (
+        <span className='tag tag-info'>
+          <Icon icon='lock' />
+        </span>
+      )}{' '}
       <span className='tag tag-warning'>{backup.remote.name}</span>{' '}
+      {backup.differencingVhds > 0 && (
+        <span className='tag tag-info'>
+          {backup.differencingVhds} {_('backupIsDifferencing')}{' '}
+        </span>
+      )}
+      {backup.dynamicVhds > 0 && (
+        <span className='tag tag-info'>
+          {backup.dynamicVhds} {_('backupisKey')}{' '}
+        </span>
+      )}
+      {backup.withMemory && <span className='tag tag-info'>{_('withMemory')} </span>}
       {backup.size !== undefined && <span className='tag tag-info'>{formatSize(backup.size)}</span>}{' '}
-      <FormattedDate
-        value={new Date(backup.timestamp)}
-        month='long'
-        day='numeric'
-        year='numeric'
-        hour='2-digit'
-        minute='2-digit'
-        second='2-digit'
-      />
+      <NumericDate timestamp={backup.timestamp} />
     </span>
   ),
+
+  PCI: props => <Pci {...props} self />,
+
+  schedule: props => <Schedule {...props} />,
+
+  job: job => <spans>{job.name}</spans>,
 }
 
 const renderXoItem = (item, { className, type: xoType, ...props } = {}) => {

@@ -1,9 +1,12 @@
 import Ajv from 'ajv'
+import cloneDeep from 'lodash/cloneDeep.js'
 import mapToArray from 'lodash/map.js'
+import merge from 'lodash/merge.js'
+import noop from 'lodash/noop.js'
+import Obfuscate from '@vates/obfuscate'
 import { createLogger } from '@xen-orchestra/log'
 import { invalidParameters, noSuchObject } from 'xo-common/api-errors.js'
 
-import * as sensitiveValues from '../sensitive-values.mjs'
 import { PluginsMetadata } from '../models/plugin-metadata.mjs'
 
 // ===================================================================
@@ -14,20 +17,33 @@ export default class {
   constructor(app) {
     this._ajv = new Ajv({
       strict: 'log',
+      // `strictRequired` option seems to require that the object's properties are defined in the same sub-schema (even
+      // though the documentation says that it can also be defined in a parent schema) which is inconvenient with
+      // features such as `anyOf` (see xo-server-auth-oidc)
+      // https://ajv.js.org/strict-mode.html#defined-required-properties
+      strictRequired: false,
       useDefaults: true,
-    }).addVocabulary(['$type', 'enumNames'])
+    }).addVocabulary(['$multiline', '$type', 'enumNames'])
     this._plugins = { __proto__: null }
 
-    this._pluginsMetadata = new PluginsMetadata({
-      connection: app._redis,
-      prefix: 'xo:plugin-metadata',
-    })
+    app.hooks.on('core started', () => {
+      this._pluginsMetadata = new PluginsMetadata({
+        connection: app._redis,
+        namespace: 'plugin-metadata',
+      })
 
-    app.hooks.on('start', () => {
       app.addConfigManager(
         'plugins',
         () => this._pluginsMetadata.get(),
-        plugins => Promise.all(plugins.map(plugin => this._pluginsMetadata.save(plugin)))
+        plugins =>
+          Promise.all(
+            plugins.map(async plugin => {
+              await this._pluginsMetadata.update(plugin)
+              if (plugin.configuration !== undefined && this._plugins[plugin.id] !== undefined) {
+                await this.configurePlugin(plugin.id, plugin.configuration)
+              }
+            })
+          )
       )
     })
   }
@@ -40,12 +56,20 @@ export default class {
     return plugin
   }
 
-  async _getPluginMetadata(id) {
-    const metadata = await this._pluginsMetadata.first(id)
-    return metadata?.properties
+  _getPluginMetadata(id) {
+    return this._pluginsMetadata.first(id)
   }
 
-  async registerPlugin(name, instance, configurationSchema, configurationPresets, description, testSchema, version) {
+  async registerPlugin(
+    name,
+    instance,
+    configurationSchema,
+    configurationPresets,
+    description,
+    keywords,
+    testSchema,
+    version
+  ) {
     const id = name
     const plugin = (this._plugins[id] = {
       configurationPresets,
@@ -54,6 +78,7 @@ export default class {
       description,
       id,
       instance,
+      keywords,
       name,
       testable: typeof instance.test === 'function',
       testSchema,
@@ -68,7 +93,7 @@ export default class {
       ;({ autoload, configuration } = metadata)
     } else {
       log.info(`[NOTICE] register plugin ${name} for the first time`)
-      await this._pluginsMetadata.save({
+      await this._pluginsMetadata.update({
         id,
         autoload,
       })
@@ -97,6 +122,7 @@ export default class {
       configurationPresets,
       configurationSchema,
       description,
+      keywords,
       loaded,
       name,
       testable,
@@ -112,13 +138,24 @@ export default class {
       autoload,
       description,
       loaded,
+      keywords,
       unloadable,
       version,
-      configuration: sensitiveValues.obfuscate(configuration),
+      configuration: Obfuscate.obfuscate(configuration),
       configurationPresets,
       configurationSchema,
       testable,
       testSchema,
+    }
+  }
+
+  async getOptionalPlugin(id) {
+    try {
+      return await this.getPlugin(id)
+    } catch (error) {
+      if (!noSuchObject.is(error, { id, type: 'plugin' })) {
+        throw error
+      }
     }
   }
 
@@ -135,33 +172,33 @@ export default class {
     }
 
     const validate = this._ajv.compile(configurationSchema)
+
+    // deep clone the configuration to avoid modifying the parameter
+    configuration = cloneDeep(configuration)
+
     if (!validate(configuration)) {
       throw invalidParameters(validate.errors)
     }
 
     // Sets the plugin configuration.
-    await plugin.instance.configure(
-      {
-        // Shallow copy of the configuration object to avoid most of the
-        // errors when the plugin is altering the configuration object
-        // which is handed over to it.
-        ...configuration,
-      },
-      {
-        loaded: plugin.loaded,
-      }
-    )
+    await plugin.instance.configure(configuration, {
+      loaded: plugin.loaded,
+    })
     plugin.configured = true
   }
 
   // Validate the configuration, configure the plugin instance and
   // save the new configuration.
-  async configurePlugin(id, configuration) {
+  async configurePlugin(id, configuration, mergeWithExisting = false) {
     const plugin = this._getRawPlugin(id)
     const metadata = await this._getPluginMetadata(id)
 
     if (metadata !== undefined) {
-      configuration = sensitiveValues.merge(configuration, metadata.configuration)
+      if (mergeWithExisting) {
+        configuration = merge({}, metadata.configuration, configuration)
+      }
+
+      configuration = Obfuscate.merge(configuration, metadata.configuration)
     }
 
     await this._configurePlugin(plugin, configuration)
@@ -220,6 +257,7 @@ export default class {
   }
 
   async purgePluginConfiguration(id) {
+    await this.unloadPlugin(id).catch(noop)
     await this._pluginsMetadata.merge(id, { configuration: undefined })
   }
 

@@ -13,7 +13,7 @@ import { isAdmin, createGetObject, createGetObjectsOfType, getIsPoolAdmin } from
 import { injectIntl } from 'react-intl'
 import { injectState, provideState } from 'reaclette'
 import { linkState } from 'reaclette-utils'
-import { map } from 'lodash'
+import map from 'lodash/map.js'
 import { Select, Toggle } from 'form'
 import { SelectHost, SelectPif, SelectPool } from 'select-objects'
 
@@ -30,6 +30,7 @@ const EMPTY = {
   isPrivate: false,
   mtu: '',
   name: '',
+  nbd: undefined,
   networks: [],
   pif: undefined,
   pifs: [],
@@ -61,11 +62,18 @@ If and only if the PIF:
 
 For more info see: https://xapi-project.github.io/xapi/design/tunnelling.html
 */
-const canSupportPrivateNetwork = (pool, pif) =>
-  (pif.isBondMaster || pif.physical || pif.vlan !== -1) &&
-  pif.mode !== 'None' &&
-  !pif.isBondSlave &&
-  pif.$host === pool.master
+const canSupportPrivateNetwork = (pool, pif) => {
+  if (pool === undefined || pif === undefined) {
+    return false
+  }
+
+  return (
+    (pif.isBondMaster || pif.physical || pif.vlan !== -1) &&
+    pif.mode !== 'None' &&
+    !pif.isBondSlave &&
+    pif.$host === pool.master
+  )
+}
 
 const NewNetwork = decorate([
   connectStore(() => ({
@@ -99,6 +107,7 @@ const NewNetwork = decorate([
         }
         this.state.networks = networks
       },
+      onChangeNbd: (_, nbd) => ({ nbd: nbd?.value }),
       initialize: async () => ({ bondModes: await getBondModes() }),
       linkState,
       onChangeMode: (_, bondMode) => ({ bondMode }),
@@ -152,9 +161,9 @@ const NewNetwork = decorate([
         host =>
           host.$pool === pool.id || networks.some(({ pool }) => pool !== undefined && pool.id === host.$pool),
       pifPredicate:
-        (_, { pool }) =>
+        ({ bonded }, { pool }) =>
         pif =>
-          !pif.isBondSlave && pif.vlan === -1 && pif.$host === (pool && pool.master),
+          !pif.isBondSlave && !(bonded && pif.isBondMaster) && pif.vlan === -1 && pif.$host === (pool && pool.master),
       pifPredicateSdnController:
         (_, { pool }) =>
         pif =>
@@ -190,13 +199,17 @@ const NewNetwork = decorate([
         description,
         encapsulation,
         encrypted,
-        mtu,
         name,
+        nbd,
         networks,
         pif,
         pifs,
-        vlan,
       } = state
+
+      let { mtu, vlan } = state
+      mtu = mtu === '' ? undefined : +mtu
+      vlan = vlan === '' ? undefined : +vlan
+
       return bonded
         ? createBondedNetwork({
             bondMode: bondMode.value,
@@ -207,32 +220,33 @@ const NewNetwork = decorate([
             pool: pool.id,
           })
         : isPrivate
-        ? (() => {
-            const poolIds = [pool.id]
-            const pifIds = [pif.id]
-            for (const network of networks) {
-              poolIds.push(network.pool.id)
-              pifIds.push(network.pif.id)
-            }
-            return createPrivateNetwork({
-              poolIds,
-              pifIds,
-              name,
+          ? (() => {
+              const poolIds = [pool.id]
+              const pifIds = [pif.id]
+              for (const network of networks) {
+                poolIds.push(network.pool.id)
+                pifIds.push(network.pif.id)
+              }
+              return createPrivateNetwork({
+                poolIds,
+                pifIds,
+                name,
+                description,
+                encapsulation,
+                encrypted,
+                mtu,
+                preferredCenter: networkCenter,
+              })
+            })()
+          : createNetwork({
               description,
-              encapsulation,
-              encrypted,
-              mtu: mtu !== '' ? +mtu : undefined,
-              preferredCenter: networkCenter,
+              mtu,
+              name,
+              nbd,
+              pif: pif == null ? undefined : pif.id,
+              pool: pool.id,
+              vlan,
             })
-          })()
-        : createNetwork({
-            description,
-            mtu,
-            name,
-            pif: pif == null ? undefined : pif.id,
-            pool: pool.id,
-            vlan,
-          })
     }
 
     _selectPool = pool => {
@@ -278,6 +292,7 @@ const NewNetwork = decorate([
         modeOptions,
         mtu,
         name,
+        nbd,
         pif,
         pifPredicate,
         pifPredicateSdnController,
@@ -301,7 +316,11 @@ const NewNetwork = decorate([
                     <div>
                       <em>
                         <Icon icon='info' />{' '}
-                        <a href='https://xen-orchestra.com/docs/sdn_controller.html#requirements'>
+                        <a
+                          href='https://docs.xen-orchestra.com/sdn_controller#requirements'
+                          target='_blank'
+                          rel='noreferrer'
+                        >
                           {_('newNetworkSdnControllerTip')}
                         </a>
                       </em>
@@ -424,6 +443,16 @@ const NewNetwork = decorate([
                               placeholder={formatMessage(messages.newNetworkDefaultVlan)}
                               type='text'
                               value={vlan}
+                            />
+                            <label>{_('nbd')}</label>
+                            <Select
+                              name='nbd'
+                              onChange={effects.onChangeNbd}
+                              options={[
+                                { label: _('noNbdConnection'), value: false },
+                                { label: _('nbdConnection'), value: true },
+                              ]}
+                              value={nbd}
                             />
                           </div>
                         )}

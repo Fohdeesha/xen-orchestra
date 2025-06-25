@@ -140,9 +140,6 @@ export default {
   // Original text: "IPs"
   settingsIpsPage: 'IPs',
 
-  // Original text: "Config"
-  settingsConfigPage: 'Configuration',
-
   // Original text: "About"
   aboutPage: 'À propos',
 
@@ -245,11 +242,11 @@ export default {
   // Original text: "Welcome on Xen Orchestra!"
   homeWelcome: 'Bienvenue sur Xen Orchestra !',
 
-  // Original text: "Add your XenServer hosts or pools"
-  homeWelcomeText: 'Ajouter vos serveurs ou pools XenServer',
+  // Original text: "Add your XCP-ng hosts or pools"
+  homeWelcomeText: 'Ajouter vos serveurs ou pools XCP-ng',
 
-  // Original text: "Some XenServers have been registered but are not connected"
-  homeConnectServerText: "Des XenServers sont enregistrés mais aucun n'est connecté",
+  // Original text: "Some XCP-ng hosts have been registered but are not connected"
+  homeConnectServerText: "Des hôtes XCP-ng sont enregistrés mais aucun n'est connecté",
 
   // Original text: "Want some help?"
   homeHelp: "Besoin d'aide ?",
@@ -909,6 +906,39 @@ export default {
   // Original text: "Domain"
   remoteSmbPlaceHolderDomain: 'Domaine',
 
+  // Original text : "Use HTTPS"
+  remoteS3LabelUseHttps: 'Utiliser HTTPS',
+
+  // Original text : "Allow unauthorized"
+  remoteS3LabelAllowInsecure: 'Autoriser les connexions non-sécurisées',
+
+  // Original text : "AWS S3 endpoint (ex: s3.us-east-2.amazonaws.com)"
+  remoteS3PlaceHolderEndpoint: 'Point de terminaison AWS S3 (ex: s3.us-east-2.amazonaws.com)',
+
+  // Original text : "AWS S3 bucket name"
+  remoteS3PlaceHolderBucket: 'Nom du bucket AWS S3',
+
+  // Original text : "Directory"
+  remoteS3PlaceHolderDirectory: 'Chemin',
+
+  // Original text : "Access key ID"
+  remoteS3PlaceHolderAccessKeyID: "Clé d'accès",
+
+  // Original text : "Paste secret here to change it"
+  remoteS3PlaceHolderSecret: 'Secret',
+
+  // Original text : "Enter your encryption key here (32 characters)"
+  remoteS3PlaceHolderEncryptionKey: 'Clé de chiffrement (32 caractères)',
+
+  // Original text : "Region, leave blank for default"
+  remoteS3Region: 'Région (optionnel)',
+
+  // Original text : "Uncheck if you want HTTP instead of HTTPS"
+  remoteS3TooltipProtocol: 'Décocher pour utiliser HTTP au lieu de HTTPS',
+
+  // Original text : "Check if you want to accept self signed certificates"
+  remoteS3TooltipAcceptInsecure: 'Cochez pour accepter les certificats auto-signés',
+
   // Original text: "<address>\\<share> *"
   remoteSmbPlaceHolderAddressShare: '<adresse>\\<partage>',
 
@@ -1565,9 +1595,6 @@ export default {
 
   // Original text: "Invalid parameters"
   configIpErrorTitle: 'Paramètres invalides',
-
-  // Original text: "IP address and netmask required"
-  configIpErrorMessage: 'Adresse IP et masque de réseau requis',
 
   // Original text: "Static IP address"
   staticIp: 'Adresse IP statique',
@@ -2624,8 +2651,8 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: 'Sur le SR:',
 
-  // Original text: "VMs to import"
-  vmsToImport: 'VMs à importer',
+  // Original text: "VM{nVms, plural, one {} other {s}}  to import"
+  vmsToImport: 'VM{nVms, plural, one {} other {s}}  à importer',
 
   // Original text: "Reset"
   importVmsCleanList: 'Réinitialiser',
@@ -2642,8 +2669,8 @@ export default {
   // Original text: "Export starting…"
   startVmExport: "L'export commence…",
 
-  // Original text: "N CPUs"
-  nCpus: 'N CPUs',
+  // Original text: "Number of CPUs"
+  nCpus: 'Nombre de CPUs',
 
   // Original text: "Memory"
   vmMemory: 'Mémoire',
@@ -2701,10 +2728,6 @@ export default {
 
   // Original text: "Click on a VM to display restore options"
   restoreBackupsInfo: 'Cliquez sur une VM pour afficher les options de récupération',
-
-  // Original text: "Only the files of Delta Backup which are not on a SMB remote can be restored"
-  restoreDeltaBackupsInfo:
-    'Seuls les fichiers de Delta Backup qui ne sont pas sur un emplacement SMB peuvent être restaurés',
 
   // Original text: "Enabled"
   remoteEnabled: 'activé',
@@ -3235,12 +3258,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'Xen Orchestra',
 
-  // Original text: "Xen Orchestra server"
-  xenOrchestraServer: 'Serveur Xen Orchestra',
-
-  // Original text: "Xen Orchestra web client"
-  xenOrchestraWeb: 'Client web Xen Orchestra',
-
   // Original text: "No pro support provided!"
   noProSupport: 'Pas de support professionel fourni !',
 
@@ -3356,8 +3373,8 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: 'Pas de mise à jour sur la version Communautaire',
 
-  // Original text: "Please consider subscribe and try it with all features for free during 15 days on {link}."
-  considerSubscribe: 'Envisagez de souscrire, et essayez toutes les fonctionnalités gratuitement pendant 15 jours.',
+  // Original text: "Please consider subscribe and try it with all features for free during 30 days on {link}."
+  considerSubscribe: 'Envisagez de souscrire, et essayez toutes les fonctionnalités gratuitement pendant 30 jours.',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning:

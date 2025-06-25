@@ -2,30 +2,39 @@ import * as FormGrid from 'form-grid'
 import _, { messages } from 'intl'
 import ActionButton from 'action-button'
 import Component from 'base-component'
+import Copiable from 'copiable'
 import homeFilters from 'home-filters'
 import Icon from 'icon'
 import PropTypes from 'prop-types'
 import React from 'react'
+import SelectFiles from 'select-files'
 import SortedTable from 'sorted-table'
 import Tooltip from 'tooltip'
 import { Text } from 'editable'
-import { alert } from 'modal'
+import { alert, confirm } from 'modal'
 import { Container, Row, Col } from 'grid'
+import { error, success } from 'notification'
 import { getLang } from 'selectors'
 import { isEmpty, map } from 'lodash'
 import { injectIntl } from 'react-intl'
 import { Select } from 'form'
 import { Card, CardBlock, CardHeader } from 'card'
-import { addSubscriptions, connectStore, noop } from 'utils'
+import { addSubscriptions, connectStore, noop, NumericDate } from 'utils'
 import {
+  addAuthToken,
   addSshKey,
   changePassword,
+  deleteAuthToken,
+  deleteAuthTokens,
   deleteSshKey,
   deleteSshKeys,
+  editAuthToken,
+  editXsCredentials,
   editCustomFilter,
   removeCustomFilter,
   setDefaultHomeFilter,
   signOutFromEverywhereElse,
+  subscribeUserAuthTokens,
   subscribeCurrentUser,
 } from 'xo'
 
@@ -53,6 +62,7 @@ const FILTER_TYPE_TO_LABEL_ID = {
   pool: 'homeTypePool',
   VM: 'homeTypeVm',
   'VM-template': 'homeTypeVmTemplate',
+  SR: 'homeTypeSr',
 }
 
 const SSH_KEY_STYLE = { wordWrap: 'anywhere' }
@@ -66,6 +76,81 @@ const getDefaultFilter = (defaultFilters, type) => {
 }
 
 const getUserPreferences = user => user.preferences || {}
+
+// ===================================================================
+
+@addSubscriptions({
+  user: subscribeCurrentUser,
+})
+class XsClientId extends Component {
+  async editXsCredentials(file) {
+    if (file === undefined) {
+      error(_('noFileSelected'))
+      return
+    }
+
+    try {
+      await new Promise((resolve, reject) => {
+        const fr = new window.FileReader()
+        fr.onload = event => {
+          try {
+            const { username, apikey } = JSON.parse(event.target.result)
+            if (username === undefined || apikey === undefined) {
+              reject(new Error('Could not find username and apikey in file'))
+            }
+
+            editXsCredentials({ username, apikey }).then(resolve, reject)
+          } catch (err) {
+            reject(err)
+          }
+        }
+        fr.readAsText(file)
+      })
+      success(_('setXsCredentialsSuccess'))
+    } catch (err) {
+      error(_('setXsCredentialsError'), err.message)
+    }
+  }
+
+  async deleteXsCredentials() {
+    await confirm({
+      icon: 'delete',
+      title: _('forgetClientId'),
+      body: _('forgetXsCredentialsConfirm'),
+    })
+    try {
+      await editXsCredentials(null)
+      success(_('forgetXsCredentialsSuccess'))
+    } catch (err) {
+      error('forgetXsCredentialsError', err.message)
+    }
+  }
+
+  render() {
+    const isConfigured = this.props.user?.preferences?.xsCredentials !== undefined
+    return (
+      <Container>
+        <Row>
+          <Col smallSize={2}>
+            <strong>{_('xsClientId')}</strong>{' '}
+            <a href='https://docs.xen-orchestra.com/updater#xenserver-updates' target='_blank' rel='noreferrer'>
+              <Icon icon='info' />
+            </a>
+          </Col>
+          <Col smallSize={10}>
+            <span className='mr-1'>{isConfigured ? _('configured') : _('notConfigured')}</span>
+            <SelectFiles onChange={this.editXsCredentials} label={_('uploadClientId')} />{' '}
+            {isConfigured && (
+              <ActionButton btnStyle='danger' handler={this.deleteXsCredentials} icon='delete'>
+                {_('forgetClientId')}
+              </ActionButton>
+            )}
+          </Col>
+        </Row>
+      </Container>
+    )
+  }
+}
 
 // ===================================================================
 
@@ -282,6 +367,114 @@ const SshKeys = addSubscriptions({
 })
 
 // ===================================================================
+const COLUMNS_AUTH_TOKENS = [
+  {
+    itemRenderer: ({ id }) => (
+      <Copiable tagName='pre' data={id}>
+        {id.slice(0, 5)}…
+      </Copiable>
+    ),
+    name: _('authToken'),
+  },
+  {
+    itemRenderer: token => (
+      <Text value={token.description ?? ''} onChange={description => editAuthToken({ ...token, description })} />
+    ),
+    name: _('description'),
+    sortCriteria: 'description',
+  },
+  {
+    itemRenderer: ({ last_use_ip, last_uses }) => {
+      if (last_use_ip !== undefined) {
+        return (
+          <span>
+            <NumericDate timestamp={last_uses[last_use_ip].timestamp} /> by <code>{last_use_ip}</code>
+          </span>
+        )
+      }
+      return _('notDefined')
+    },
+    name: _('authTokenLastUse'),
+    sortCriteria: ({ last_use_ip, last_uses }) => last_use_ip && last_uses[last_use_ip].timestamp,
+  },
+  {
+    default: true,
+    itemRenderer: ({ expiration }) => <NumericDate timestamp={expiration} />,
+    name: _('expiration'),
+    sortCriteria: 'expiration',
+  },
+]
+
+const INDIVIDUAL_ACTIONS_AUTH_TOKENS = [
+  {
+    handler: deleteAuthToken,
+    icon: 'delete',
+    label: _('delete'),
+    level: 'danger',
+  },
+]
+
+const GROUPED_ACTIONS_AUTH_TOKENS = [
+  {
+    handler: deleteAuthTokens,
+    icon: 'delete',
+    label: _('deleteAuthTokens'),
+    level: 'danger',
+  },
+]
+
+const UserAuthTokens = addSubscriptions({
+  userAuthTokens: cb =>
+    subscribeUserAuthTokens(tokens => {
+      cb(
+        tokens.map(token => {
+          // find and inject last_use_ip from last_uses dictionary
+          const { last_uses } = token
+          if (last_uses !== undefined) {
+            const ips = Object.keys(last_uses)
+            const n = ips.length
+            if (n !== 0) {
+              let lastIp = ips[0]
+              let lastTimestamp = last_uses[lastIp].timestamp
+              for (let i = 1; i < n; ++i) {
+                const ip = ips[i]
+                const { timestamp } = last_uses[ip]
+                if (timestamp > lastTimestamp) {
+                  lastIp = ip
+                  lastTimestamp = timestamp
+                }
+              }
+              return { ...token, last_use_ip: lastIp }
+            }
+          }
+
+          return token
+        })
+      )
+    }),
+})(({ userAuthTokens }) => (
+  <div>
+    <Card>
+      <CardHeader>
+        <Icon icon='user' /> {_('authTokens')}
+        <ActionButton className='btn-success pull-right' icon='add' handler={addAuthToken}>
+          {_('newAuthToken')}
+        </ActionButton>
+      </CardHeader>
+      <CardBlock>
+        <SortedTable
+          collection={userAuthTokens}
+          columns={COLUMNS_AUTH_TOKENS}
+          stateUrlParam='s_auth_tokens'
+          groupedActions={GROUPED_ACTIONS_AUTH_TOKENS}
+          individualActions={INDIVIDUAL_ACTIONS_AUTH_TOKENS}
+        />
+      </CardBlock>
+    </Card>
+  </div>
+))
+
+// ===================================================================
 
 @addSubscriptions({
   user: subscribeCurrentUser,
@@ -391,15 +584,23 @@ export default class User extends Component {
             <Col smallSize={10}>
               <select className='form-control' onChange={this.handleSelectLang} value={lang} style={{ width: '10em' }}>
                 <option value='en'>English</option>
+                <option value='ru'>Русский</option>
                 <option value='es'>Español</option>
+                <option value='fa'>Persian</option>
                 <option value='fr'>Français</option>
                 <option value='hu'>Magyar</option>
                 <option value='it'>Italiano</option>
                 <option value='pl'>Polski</option>
                 <option value='pt'>Português</option>
+                <option value='sv'>Svenska</option>
                 <option value='tr'>Türkçe</option>
                 <option value='he'>עברי</option>
                 <option value='zh'>简体中文</option>
+                <option value='ja'>日本語</option>
+                <option value='de'>Deutsch - XO6</option>
+                <option value='cs'>čeština - XO6</option>
+                <option value='uk'>Українська - XO6</option>
+                <option value='nl'>Nederlands - XO6</option>
               </select>
             </Col>
           </Row>
@@ -409,7 +610,11 @@ export default class User extends Component {
           <Otp user={user} key='otp' />,
           <hr key='hr' />,
         ]}
+        <XsClientId user={user} />
+        <hr />
         <SshKeys />
+        <hr />
+        <UserAuthTokens />
         <hr />
         <UserFilters user={user} />
       </Page>

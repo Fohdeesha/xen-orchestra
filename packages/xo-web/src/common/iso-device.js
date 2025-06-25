@@ -8,7 +8,7 @@ import Icon from 'icon'
 import Tooltip from 'tooltip'
 import { alert } from 'modal'
 import { isAdmin } from 'selectors'
-import { isEmpty } from 'lodash'
+import isEmpty from 'lodash/isEmpty.js'
 import { addSubscriptions, connectStore, resolveResourceSet } from './utils'
 import { ejectCd, insertCd, rescanSrs, subscribeResourceSets } from './xo'
 import { createGetObjectsOfType, createFinder, createGetObject, createSelector } from './selectors'
@@ -54,13 +54,9 @@ export default class IsoDevice extends Component {
     () => this.props.vm.$pool,
     () => this.props.vm.$container,
     (vmPool, vmContainer) => sr => {
-      const vmRunning = vmContainer !== vmPool
-      const sameHost = vmContainer === sr.$container
-      const samePool = vmPool === sr.$pool
-
       return (
-        samePool &&
-        (vmRunning ? sr.shared || sameHost : true) &&
+        vmPool === sr.$pool &&
+        (sr.shared || vmContainer === sr.$container) &&
         (sr.SR_type === 'iso' || (sr.SR_type === 'udev' && sr.size))
       )
     }

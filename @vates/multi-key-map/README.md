@@ -10,8 +10,8 @@
 
 Installation of the [npm package](https://npmjs.org/package/@vates/multi-key-map):
 
-```
-> npm install --save @vates/multi-key-map
+```sh
+npm install --save @vates/multi-key-map
 ```
 
 ## Usage
@@ -35,6 +35,16 @@ map.get(['foo', 'bar']) // 2
 map.get(['bar', 'foo']) // 3
 map.get([OBJ]) // 4
 map.get([{}]) // undefined
+
+map.delete([])
+
+for (const [key, value] of map.entries() {
+  console.log(key, value)
+}
+
+for (const  value of map.values()) {
+  console.log(value)
+}
 ```
 
 ## Contributions

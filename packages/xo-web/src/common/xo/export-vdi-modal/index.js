@@ -7,12 +7,20 @@ import { Select } from '../../form'
 
 const OPTIONS = [
   {
+    label: _('qcow2'),
+    value: 'qcow2',
+  },
+  {
     label: _('vhd'),
     value: 'vhd',
   },
   {
     label: _('vmdk'),
     value: 'vmdk',
+  },
+  {
+    label: _('raw'),
+    value: 'raw',
   },
 ]
 export default class ExportVdiModalBody extends BaseComponent {

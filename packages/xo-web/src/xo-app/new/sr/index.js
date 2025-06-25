@@ -1,11 +1,12 @@
+/* eslint-disable react/no-string-refs */
 import _, { messages } from 'intl'
 import ActionButton from 'action-button'
 import Component from 'base-component'
 import Icon from 'icon'
-import ignoreErrors from 'promise-toolbox/ignoreErrors'
 import includes from 'lodash/includes'
 import info, { error } from 'notification'
 import isEmpty from 'lodash/isEmpty'
+import { isIpV6 } from 'ip-utils'
 import map from 'lodash/map'
 import Page from '../../page'
 import PropTypes from 'prop-types'
@@ -27,6 +28,7 @@ import {
   createSrLvm,
   createSrNfs,
   createSrHba,
+  createSrSmb,
   createSrZfs,
   probeSrIscsiExists,
   probeSrIscsiIqns,
@@ -53,8 +55,8 @@ class SelectScsiId extends Component {
   _getOptions = createSelector(
     () => this.props.options,
     options =>
-      map(options, ({ id, path, scsiId, serial, size, vendor }) => ({
-        label: `${vendor} ${id}: ${serial} - ${path} (${formatSize(size)})`,
+      map(options, ({ id, path, scsiId, size, vendor, lun }) => ({
+        label: `${vendor} ${id}: ${scsiId} - LUN: ${lun} - ${path} (${formatSize(size)})`,
         value: scsiId,
       }))
   )
@@ -176,6 +178,7 @@ const SR_TYPE_TO_LABEL = {
   nfs: 'NFS',
   nfsiso: 'NFS ISO',
   smb: 'SMB',
+  smbiso: 'SMB ISO',
   zfs: 'ZFS (local)',
 }
 
@@ -184,9 +187,11 @@ const SR_GROUP_TO_LABEL = {
   isosr: 'ISO SR',
 }
 
+const SR_TYPE_REQUIRE_DISK_FORMATTING = ['ext', 'lvm']
+
 const typeGroups = {
-  vdisr: ['ext', 'hba', 'iscsi', 'lvm', 'nfs', 'zfs'],
-  isosr: ['local', 'nfsiso', 'smb'],
+  vdisr: ['ext', 'hba', 'iscsi', 'lvm', 'nfs', 'smb', 'zfs'],
+  isosr: ['local', 'nfsiso', 'smbiso'],
 }
 
 const getSrPath = id => (id !== undefined ? `/srs/${id}` : undefined)
@@ -230,7 +235,7 @@ export default class New extends Component {
     () => this.props.srs,
     createSelector(
       () => this.state.host,
-      host => host !== undefined && (sr => sr.$container === host.$pool || sr.$container === host.id)
+      host => host != null && (sr => sr.$container === host.$pool || sr.$container === host.id)
     )
   )
 
@@ -276,22 +281,8 @@ export default class New extends Component {
           nfsOptions,
           srUuid
         ),
-      hba: async () => {
-        if (srUuid === undefined) {
-          const previous = await probeSrHbaExists(host.id, scsiId)
-          if (previous && previous.length > 0) {
-            try {
-              await confirm({
-                title: _('existingLunModalTitle'),
-                body: <p>{_('existingLunModalText')}</p>,
-              })
-            } catch (error) {
-              return
-            }
-          }
-        }
-        return createSrHba(host.id, name.value, description.value, scsiId, srUuid)
-      },
+      smb: () => createSrSmb(host.id, name.value, description.value, server.value, username.value, password.value),
+      hba: () => createSrHba(host.id, name.value, description.value, scsiId, srUuid),
       iscsi: async () => {
         if (srUuid === undefined) {
           const previous = await probeSrIscsiExists(
@@ -336,13 +327,15 @@ export default class New extends Component {
           host.id,
           name.value,
           description.value,
-          `${server.value}:${path}`,
+          isIpV6(server.value) ? `[${server.value}]:${path}` : `${server.value}:${path}`,
           'nfs',
           username && username.value,
           password && password.value,
+          nfsVersion !== '' ? nfsVersion : undefined,
+          nfsOptions,
           srUuid
         ),
-      smb: () =>
+      smbiso: () =>
         createSrIso(
           host.id,
           name.value,
@@ -351,13 +344,36 @@ export default class New extends Component {
           'smb',
           username && username.value,
           password && password.value,
+          undefined,
+          undefined,
           srUuid
         ),
     }
 
     try {
+      if (SR_TYPE_REQUIRE_DISK_FORMATTING.includes(type)) {
+        await confirm({
+          title: _('newSr'),
+          body: <p>{_('newSrConfirm', { name: device.value })}</p>,
+        })
+      }
+      const existingSrsLength = this.state.existingSrs?.length ?? 0
+      // `existingSrs` is defined if the SR type is `NFS` or `ISCSI` and if at least one SR is detected
+      // Ignore NFS type because it is not supposed to erase data
+      if (type !== 'nfs' && existingSrsLength !== 0 && srUuid === undefined) {
+        await confirm({
+          title: _('newSr'),
+          body: _('newSrExistingSr', { path: <b>{this.state.path}</b>, n: existingSrsLength }),
+          strongConfirm: {
+            messageId: 'newSrTitle',
+          },
+        })
+      }
       return await createMethodFactories[type]()
     } catch (err) {
+      if (err === undefined) {
+        return
+      }
       error('SR Creation', err.message || String(err))
     }
   }
@@ -376,7 +392,7 @@ export default class New extends Component {
       hbaDevices: undefined,
       iqns: undefined,
       paths: undefined,
-      summary: includes(['ext', 'lvm', 'local', 'smb', 'hba', 'zfs'], type),
+      summary: includes(['ext', 'lvm', 'local', 'smb', 'smbiso', 'hba', 'zfs'], type),
       type,
       usage: undefined,
     })
@@ -385,6 +401,7 @@ export default class New extends Component {
 
   _handleSrHbaSelection = async scsiId => {
     this.setState({
+      existingSrs: await probeSrHbaExists(this.state.host.id, scsiId),
       scsiId,
       usage: true,
     })
@@ -452,11 +469,11 @@ export default class New extends Component {
   _handleSearchServer = async () => {
     const { password, port, server, username } = this.refs
 
-    const { host, type } = this.state
+    const { host, nfsVersion, type } = this.state
 
     try {
       if (type === 'nfs' || type === 'nfsiso') {
-        const paths = await probeSrNfs(host.id, server.value)
+        const paths = await probeSrNfs(host.id, server.value, nfsVersion !== '' ? nfsVersion : undefined)
         this.setState({
           usage: undefined,
           paths,
@@ -485,17 +502,18 @@ export default class New extends Component {
 
   _handleSrPathSelection = async path => {
     const { server } = this.refs
-    const { host } = this.state
+    const { host, nfsVersion } = this.state
 
     try {
       this.setState(({ loading }) => ({ loading: loading + 1 }))
       this.setState({
-        existingSrs: await probeSrNfsExists(host.id, server.value, path),
+        existingSrs: await probeSrNfsExists(host.id, server.value, path, nfsVersion !== '' ? nfsVersion : undefined),
         path,
         usage: true,
         summary: true,
       })
     } catch (err) {
+      this.setState({ summary: false, usage: false })
       error('NFS Error', err.message || String(err))
     } finally {
       this.setState(({ loading }) => ({ loading: loading - 1 }))
@@ -511,19 +529,22 @@ export default class New extends Component {
   _probe = async (host, type) => {
     const probeMethodFactories = {
       hba: async hostId => ({
-        hbaDevices: await probeSrHba(hostId)::ignoreErrors(),
+        hbaDevices: await probeSrHba(hostId),
       }),
       zfs: async hostId => ({
-        zfsPools: await probeZfs(hostId)::ignoreErrors(),
+        zfsPools: await probeZfs(hostId),
       }),
     }
     if (probeMethodFactories[type] !== undefined && host != null) {
       this.setState(({ loading }) => ({ loading: loading + 1 }))
-      const probeResult = await probeMethodFactories[type](host.id)
-      this.setState(({ loading }) => ({
-        loading: loading - 1,
-        ...probeResult,
-      }))
+      try {
+        const probeResult = await probeMethodFactories[type](host.id)
+        this.setState(probeResult)
+      } catch (err) {
+        error('Device detection failed', err.message || String(err))
+      } finally {
+        this.setState(({ loading }) => ({ loading: loading - 1 }))
+      }
     }
   }
 
@@ -553,8 +574,10 @@ export default class New extends Component {
       lun,
       luns,
       nfsVersion,
+      nfsSubdir,
       path,
       paths,
+      selectedMainPath,
       summary,
       type,
       usage,
@@ -677,21 +700,47 @@ export default class New extends Component {
                       <label htmlFor='selectSrPath'>{_('newSrPath')}</label>
                       <select
                         className='form-control'
-                        defaultValue={null}
+                        defaultValue=''
                         id='selectSrPath'
                         onChange={event => {
-                          this._handleSrPathSelection(event.target.value)
+                          const selectedPath = event.target.value
+                          this.setState({ selectedMainPath: selectedPath })
+                          this._handleSrPathSelection(selectedPath)
                         }}
                         ref='path'
                         required
                       >
-                        <option value={null}>{formatMessage(messages.noSelectedValue)}</option>
+                        <option disabled value=''>
+                          {formatMessage(messages.noSelectedValue)}
+                        </option>
                         {map(paths, (item, key) => (
                           <option key={key} value={item.path}>
                             {item.path}
                           </option>
                         ))}
                       </select>
+                      {(type === 'nfs' || type === 'nfsiso') && selectedMainPath !== undefined && (
+                        <div>
+                          <label htmlFor='nfsSubdirectory'>{_('subdirectory')}</label>
+                          <div className='input-group'>
+                            <span className='input-group-addon'>/</span>
+                            <input
+                              className='form-control'
+                              id='nfsSubdirectory'
+                              type='text'
+                              onChange={this.linkState('nfsSubdir')}
+                            />
+                            <span className='input-group-btn'>
+                              <ActionButton
+                                icon='search'
+                                handler={() => {
+                                  this._handleSrPathSelection(selectedMainPath.concat('/' + (nfsSubdir?.trim() ?? '')))
+                                }}
+                              />
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </fieldset>
                   )}
                   {type === 'iscsi' && (
@@ -759,7 +808,7 @@ export default class New extends Component {
                       <SelectLun options={luns} onChange={this._handleSrLunSelection} />
                     </fieldset>
                   )}
-                  {type === 'smb' && (
+                  {(type === 'smb' || type === 'smbiso') && (
                     <fieldset>
                       <label htmlFor='srServer'>{_('newSrServer')}</label>
                       <input
@@ -776,15 +825,10 @@ export default class New extends Component {
                         className='form-control'
                         placeholder={formatMessage(messages.newSrUsernamePlaceHolder)}
                         ref='username'
-                        required
                         type='text'
                       />
                       <label>{_('newSrPassword')}</label>
-                      <Password
-                        placeholder={formatMessage(messages.newSrPasswordPlaceHolder)}
-                        ref='password'
-                        required
-                      />
+                      <Password placeholder={formatMessage(messages.newSrPasswordPlaceHolder)} ref='password' />
                     </fieldset>
                   )}
                   {(type === 'lvm' || type === 'ext') && (
@@ -905,3 +949,4 @@ export default class New extends Component {
     )
   }
 }
+/* eslint-enable react/no-string-refs */

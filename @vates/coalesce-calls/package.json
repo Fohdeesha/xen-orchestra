@@ -30,6 +30,7 @@
     "node": ">=8.10"
   },
   "scripts": {
-    "postversion": "npm publish --access public"
+    "postversion": "npm publish --access public",
+    "test": "node --test"
   }
 }

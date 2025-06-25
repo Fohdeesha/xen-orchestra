@@ -10,6 +10,8 @@ import { generateId } from 'reaclette-utils'
 import { injectState, provideState } from 'reaclette'
 import { Number } from 'form'
 
+import ScheduleHealthCheck from './healthCheck/ScheduleHealthCheck'
+
 import { FormGroup, Input } from './../utils'
 
 const New = decorate([
@@ -64,9 +66,25 @@ const New = decorate([
             name: value.trim() === '' ? null : value,
           })
         },
+      setHealthCheckTags({ setSchedule }, tags) {
+        setSchedule({
+          healthCheckVmsWithTags: tags,
+        })
+      },
       toggleForceFullBackup({ setSchedule }) {
         setSchedule({
           fullInterval: this.state.forceFullBackup ? undefined : 1,
+        })
+      },
+      toggleHealthCheck({ setSchedule }, { target: { checked } }) {
+        setSchedule({
+          healthCheckVmsWithTags: checked ? [] : undefined,
+          healthCheckSr: checked ? this.state.healthCheckSr : undefined,
+        })
+      },
+      setHealthCheckSr({ setSchedule }, sr) {
+        setSchedule({
+          healthCheckSr: sr.id,
         })
       },
     },
@@ -115,6 +133,12 @@ const New = decorate([
             <Number min='0' onChange={effects.setSnapshotRetention} value={schedule.snapshotRetention} required />
           </FormGroup>
         )}
+        <ScheduleHealthCheck
+          schedule={schedule}
+          toggleHealthCheck={effects.toggleHealthCheck}
+          setHealthCheckSr={effects.setHealthCheckSr}
+          setHealthCheckTags={effects.setHealthCheckTags}
+        />
         {modes.isDelta && (
           <FormGroup>
             <label>

@@ -1,9 +1,12 @@
-const { unpackHeader, unpackFooter, sectorsToBytes } = require('./_utils')
+'use strict'
+
+const { unpackHeader, unpackFooter } = require('./_utils')
 const { createLogger } = require('@xen-orchestra/log')
 const { fuFooter, fuHeader, checksumStruct } = require('../_structs')
 const { test, set: setBitmap } = require('../_bitmap')
 const { VhdAbstract } = require('./VhdAbstract')
 const assert = require('assert')
+const { synchronized } = require('decorator-synchronized')
 const promisify = require('promise-toolbox/promisify')
 const zlib = require('zlib')
 
@@ -102,7 +105,7 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
   static async open(handler, path, { flags = 'r+' } = {}) {
     const vhd = new VhdDirectory(handler, path, { flags })
 
-    // openning a file for reading does not trigger EISDIR as long as we don't really read from it :
+    // opening a file for reading does not trigger EISDIR as long as we don't really read from it :
     // https://man7.org/linux/man-pages/man2/open.2.html
     // EISDIR pathname refers to a directory and the access requested
     // involved writing (that is, O_WRONLY or O_RDWR is set).
@@ -115,7 +118,7 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
   }
 
   static async create(handler, path, { flags = 'wx+', compression } = {}) {
-    await handler.mkdir(path)
+    await handler.mktree(path)
     const vhd = new VhdDirectory(handler, path, { flags, compression })
     return {
       dispose: () => {},
@@ -129,6 +132,7 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
     this._path = path
     this._opts = opts
     this.#compressor = getCompressor(opts?.compression)
+    this.writeBlockAllocationTable = synchronized()(this.writeBlockAllocationTable)
   }
 
   async readBlockAllocationTable() {
@@ -140,13 +144,13 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
     return test(this.#blockTable, blockId)
   }
 
-  _getChunkPath(partName) {
+  #getChunkPath(partName) {
     return this._path + '/' + partName
   }
 
   async _readChunk(partName) {
     // here we can implement compression and / or crypto
-    const buffer = await this._handler.readFile(this._getChunkPath(partName))
+    const buffer = await this._handler.readFile(this.#getChunkPath(partName))
 
     const uncompressed = await this.#compressor.decompress(buffer)
     return {
@@ -161,15 +165,21 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
       `Can't write a chunk ${partName} in ${this._path} with read permission`
     )
 
+    // in case of VhdDirectory, we want to create the file if it does not exists
+    const flags = this._opts?.flags === 'r+' ? 'w' : this._opts?.flags
     const compressed = await this.#compressor.compress(buffer)
-    return this._handler.outputFile(this._getChunkPath(partName), compressed, this._opts)
+    return this._handler.outputFile(this.#getChunkPath(partName), compressed, { flags })
   }
 
   // put block in subdirectories to limit impact when doing directory listing
-  _getBlockPath(blockId) {
+  #getBlockPath(blockId) {
     const blockPrefix = Math.floor(blockId / 1e3)
     const blockSuffix = blockId - blockPrefix * 1e3
     return `blocks/${blockPrefix}/${blockSuffix}`
+  }
+
+  _getFullBlockPath(blockId) {
+    return this.#getChunkPath(this.#getBlockPath(blockId))
   }
 
   async readHeaderAndFooter() {
@@ -198,7 +208,7 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
     if (onlyBitmap) {
       throw new Error(`reading 'bitmap of block' ${blockId} in a VhdDirectory is not implemented`)
     }
-    const { buffer } = await this._readChunk(this._getBlockPath(blockId))
+    const { buffer } = await this._readChunk(this.#getBlockPath(blockId))
     return {
       id: blockId,
       bitmap: buffer.slice(0, this.bitmapSize),
@@ -238,25 +248,53 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
   }
 
   // only works if data are in the same handler
-  // and if the full block is modified in child ( which is the case whit xcp)
+  // and if the full block is modified in child (which is the case with xcp)
   // and if the compression type is same on both sides
-  async coalesceBlock(child, blockId) {
+  async mergeBlock(child, blockId, isResumingMerge = false) {
+    const childBlockPath = child._getFullBlockPath?.(blockId)
+    let initialSize = 0
     if (
-      !(child instanceof VhdDirectory) ||
+      childBlockPath === undefined ||
       this._handler !== child._handler ||
-      child.compressionType !== this.compressionType
+      child.compressionType !== this.compressionType ||
+      child.compressionType === 'MIXED'
     ) {
-      return super.coalesceBlock(child, blockId)
+      return super.mergeBlock(child, blockId)
     }
-    await this._handler.copy(
-      child._getChunkPath(child._getBlockPath(blockId)),
-      this._getChunkPath(this._getBlockPath(blockId))
-    )
-    return sectorsToBytes(this.sectorsPerBlock)
+    try {
+      const blockExists = this.containsBlock(blockId)
+      if (blockExists) {
+        initialSize = await this._handler.getSizeOnDisk(this._getFullBlockPath(blockId))
+      }
+
+      await this._handler.rename(childBlockPath, this._getFullBlockPath(blockId))
+
+      if (!blockExists) {
+        setBitmap(this.#blockTable, blockId)
+        await this.writeBlockAllocationTable()
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT' && isResumingMerge === true) {
+        // when resuming, the blocks moved since the last merge state write are
+        // not in the child anymore but it should be ok
+
+        // it will throw an error if block is missing in parent
+        // won't detect if the block was already in parent and is broken/missing in child
+
+        // since we can't know the initial size, this will create a discrepancy
+        // on the size
+        const { data } = await this.readBlock(blockId)
+        assert.strictEqual(data.length, this.header.blockSize)
+      } else {
+        throw error
+      }
+    }
+    setBitmap(this.#blockTable, blockId)
+    return (await this._handler.getSizeOnDisk(this._getFullBlockPath(blockId))) - initialSize
   }
 
   async writeEntireBlock(block) {
-    await this._writeChunk(this._getBlockPath(block.id), block.buffer)
+    await this._writeChunk(this.#getBlockPath(block.id), block.buffer)
     setBitmap(this.#blockTable, block.id)
   }
 
@@ -275,7 +313,7 @@ exports.VhdDirectory = class VhdDirectory extends VhdAbstract {
     if (compressionType === undefined) {
       await this._handler.unlink(path)
     } else {
-      await this._handler.writeFile(path, JSON.stringify([compressionType]))
+      await this._handler.writeFile(path, JSON.stringify([compressionType]), { flags: 'w' })
     }
   }
 

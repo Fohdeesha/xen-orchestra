@@ -1,19 +1,36 @@
-import _, { messages } from 'intl'
+import _, { FormattedDuration, messages } from 'intl'
 import Collapse from 'collapse'
 import Component from 'base-component'
-import defined from '@xen-orchestra/defined'
 import Icon from 'icon'
 import Link from 'link'
 import React from 'react'
-import renderXoItem, { Pool } from 'render-xo-item'
+import renderXoItem, { Pool, renderXoItemFromId } from 'render-xo-item'
 import SortedTable from 'sorted-table'
-import { FormattedDate, FormattedRelative, injectIntl } from 'react-intl'
+import TASK_STATUS from 'task-status'
+import Tooltip from 'tooltip'
+import { addSubscriptions, connectStore, NumericDate, resolveIds } from 'utils'
+import { FormattedRelative, injectIntl } from 'react-intl'
 import { SelectPool } from 'select-objects'
-import { connectStore, resolveIds } from 'utils'
 import { Col, Container, Row } from 'grid'
-import { differenceBy, flatMap, flatten, forOwn, groupBy, isEmpty, keys, map, some, toArray } from 'lodash'
-import { createFilter, createGetObject, createGetObjectsOfType, createSelector } from 'selectors'
-import { cancelTask, cancelTasks, destroyTask, destroyTasks } from 'xo'
+import { differenceBy, isEmpty, map, some } from 'lodash'
+import {
+  createFilter,
+  createGetObject,
+  createGetObjectsOfType,
+  createSelector,
+  getResolvedPendingTasks,
+  isAdmin,
+} from 'selectors'
+import {
+  abortXoTask,
+  cancelTask,
+  cancelTasks,
+  deleteXoTaskLog,
+  destroyTask,
+  destroyTasks,
+  subscribePermissions,
+  subscribeXoTasks,
+} from 'xo'
 
 import Page from '../page'
 
@@ -40,25 +57,32 @@ const Li = props => (
 )
 
 const TASK_ITEM_STYLE = {
-  // Remove all margin, otherwise it breaks vertical alignment.
+  // Remove all margin; otherwise, it breaks vertical alignment.
   margin: 0,
 }
 
 const FILTERS = {
-  filterOutShortTasks: '!name_label: |(SR.scan host.call_plugin)',
+  filterOutShortTasks: '!name_label: |(SR.scan host.call_plugin "/rrd_updates")',
 }
 
 @connectStore(() => ({
   host: createGetObject((_, props) => props.item.$host),
+  appliesTo: createGetObject((_, props) => props.item.applies_to),
 }))
 export class TaskItem extends Component {
   render() {
-    const { host, item: task } = this.props
-
+    const { appliesTo, host, item: task } = this.props
+    // garbage collection task has an uuid in the desc
+    const showDesc = task.name_description && task.name_label !== 'Garbage Collection'
     return (
       <div>
-        {task.name_label} ({task.name_description && `${task.name_description} `}
+        {task.name_label} ({showDesc && `${task.name_description} `}
         on {host ? <Link to={`/hosts/${host.id}`}>{host.name_label}</Link> : `unknown host − ${task.$host}`})
+        {appliesTo !== undefined && (
+          <span>
+            , applies to <Link to={`/srs/${appliesTo.id}`}>{appliesTo.name_label}</Link>
+          </span>
+        )}
         {task.disappeared === undefined && ` ${Math.round(task.progress * 100)}%`}
       </div>
     )
@@ -121,10 +145,12 @@ const COLUMNS = [
       const started = task.created * 1000
       const { progress } = task
 
-      if (progress === 0 || progress === 1) {
-        return // not yet started or already finished
+      const elapsed = Date.now() - started
+      if (progress === 0 || progress === 1 || elapsed < 10e3) {
+        return // not yet started, already finished or too early to estimate end
       }
-      return <FormattedRelative value={started + (Date.now() - started) / progress} />
+
+      return <FormattedRelative value={started + elapsed / progress} />
     },
     name: _('taskEstimatedEnd'),
   },
@@ -138,10 +164,60 @@ const FINISHED_TASKS_COLUMNS = [
   ...COMMON,
   {
     default: true,
-    itemRenderer: task => <FormattedDate value={task.disappeared} hour='2-digit' minute='2-digit' second='2-digit' />,
+    itemRenderer: task => <NumericDate timestamp={task.disappeared} />,
     name: _('taskLastSeen'),
     sortCriteria: task => task.disappeared,
     sortOrder: 'desc',
+  },
+]
+
+const XO_TASKS_COLUMNS = [
+  {
+    itemRenderer: task => task.properties?.name ?? task.name,
+    name: _('name'),
+  },
+  {
+    itemRenderer: task => {
+      const { objectId } = task.properties ?? task
+      return objectId === undefined ? null : renderXoItemFromId(task.objectId, { link: true })
+    },
+    name: _('object'),
+  },
+  {
+    itemRenderer: task => {
+      const progress = task.properties?.progress
+
+      return progress === undefined ? null : (
+        <progress style={TASK_ITEM_STYLE} className='progress' value={progress} max='100' />
+      )
+    },
+    name: _('progress'),
+    sortCriteria: 'progress',
+  },
+  {
+    default: true,
+    itemRenderer: task => (task.start === undefined ? null : <NumericDate timestamp={task.start} />),
+    name: _('taskStarted'),
+    sortCriteria: 'start',
+    sortOrder: 'desc',
+  },
+  {
+    itemRenderer: task => (task.end === undefined ? null : <FormattedDuration duration={task.end - task.start} />),
+    name: _('taskDuration'),
+    sortCriteria: task => task.end - task.start,
+    sortOrder: 'desc',
+  },
+  {
+    itemRenderer: task => {
+      const { icon, label } = TASK_STATUS[task.status] ?? TASK_STATUS.unknown
+      return (
+        <Tooltip content={_(label)}>
+          <Icon icon={icon} />
+        </Tooltip>
+      )
+    },
+    name: _('status'),
+    sortCriteria: 'status',
   },
 ]
 
@@ -165,6 +241,30 @@ const INDIVIDUAL_ACTIONS = [
   },
 ]
 
+const XO_TASKS_ACTIONS = [
+  {
+    handler: tasks => Promise.all(tasks.map(deleteXoTaskLog)),
+    icon: 'task-destroy',
+    label: _('taskDeleteLog'),
+    level: 'warning',
+  },
+]
+
+const XO_TASKS_INDIVIDUAL_ACTIONS = [
+  {
+    handler: task => window.open(task.href),
+    icon: 'api',
+    label: _('taskOpenRawLog'),
+  },
+  {
+    disabled: task => !(task.status === 'pending' && task.abortionRequestedAt === undefined),
+    handler: abortXoTask,
+    icon: 'task-cancel',
+    label: _('cancelTask'),
+    level: 'danger',
+  },
+]
+
 const GROUPED_ACTIONS = [
   {
     disabled: tasks => some(tasks, isNotCancelable),
@@ -182,66 +282,24 @@ const GROUPED_ACTIONS = [
   },
 ]
 
+@addSubscriptions({
+  permissions: subscribePermissions,
+  xoTasks: subscribeXoTasks,
+})
 @connectStore(() => {
-  const getPendingTasks = createGetObjectsOfType('task').filter([task => task.status === 'pending'])
+  const getPools = createGetObjectsOfType('pool').pick(
+    createSelector(getResolvedPendingTasks, resolvedPendingTasks => resolvedPendingTasks.map(task => task.$poolId))
+  )
 
-  const getNPendingTasks = getPendingTasks.count()
-
-  const predicate = obj => !isEmpty(obj.current_operations)
-
-  const getLinkedObjectsByTaskRefOrId = createSelector(
-    createGetObjectsOfType('pool').filter([predicate]),
-    createGetObjectsOfType('host').filter([predicate]),
-    createGetObjectsOfType('SR').filter([predicate]),
-    createGetObjectsOfType('VDI').filter([predicate]),
-    createGetObjectsOfType('VM').filter([predicate]),
-    createGetObjectsOfType('network').filter([predicate]),
-    (pools, hosts, srs, vdis, vms, networks) => {
-      const linkedObjectsByTaskRefOrId = {}
-      const resolveLinkedObjects = obj => {
-        Object.keys(obj.current_operations).forEach(task => {
-          if (linkedObjectsByTaskRefOrId[task] === undefined) {
-            linkedObjectsByTaskRefOrId[task] = []
-          }
-          linkedObjectsByTaskRefOrId[task].push(obj)
-        })
-      }
-
-      forOwn(pools, resolveLinkedObjects)
-      forOwn(hosts, resolveLinkedObjects)
-      forOwn(srs, resolveLinkedObjects)
-      forOwn(vdis, resolveLinkedObjects)
-      forOwn(vms, resolveLinkedObjects)
-      forOwn(networks, resolveLinkedObjects)
-
-      return linkedObjectsByTaskRefOrId
+  return (state, props) => {
+    // true: useResourceSet to bypass permissions
+    const resolvedPendingTasks = getResolvedPendingTasks(state, props, true)
+    return {
+      isAdmin: isAdmin(state, props),
+      nResolvedTasks: resolvedPendingTasks.length,
+      pools: getPools(state, props, true),
+      resolvedPendingTasks,
     }
-  )
-
-  const getPendingTasksByPool = createSelector(
-    getPendingTasks,
-    getLinkedObjectsByTaskRefOrId,
-    (tasks, linkedObjectsByTaskRefOrId) =>
-      groupBy(
-        map(tasks, task => ({
-          ...task,
-          objects: [
-            ...defined(linkedObjectsByTaskRefOrId[task.xapiRef], []),
-            // for VMs, the current_operations prop is
-            // { taskId → operation } map instead of { taskRef → operation } map
-            ...defined(linkedObjectsByTaskRefOrId[task.id], []),
-          ],
-        })),
-        '$pool'
-      )
-  )
-
-  const getPools = createGetObjectsOfType('pool').pick(createSelector(getPendingTasksByPool, keys))
-
-  return {
-    nTasks: getNPendingTasks,
-    pendingTasksByPool: getPendingTasksByPool,
-    pools: getPools,
   }
 })
 @injectIntl
@@ -251,11 +309,7 @@ export default class Tasks extends Component {
   }
 
   componentWillReceiveProps(props) {
-    const finishedTasks = differenceBy(
-      flatten(toArray(this.props.pendingTasksByPool)),
-      flatten(toArray(props.pendingTasksByPool)),
-      'id'
-    )
+    const finishedTasks = differenceBy(this.props.resolvedPendingTasks, props.resolvedPendingTasks, 'id')
     if (!isEmpty(finishedTasks)) {
       this.setState({
         finishedTasks: finishedTasks
@@ -265,44 +319,35 @@ export default class Tasks extends Component {
     }
   }
 
-  _getTasks = createSelector(
+  _getPoolFilter = createSelector(
     createSelector(() => this.state.pools, resolveIds),
-    () => this.props.pendingTasksByPool,
-    (poolIds, pendingTasksByPool) =>
-      isEmpty(poolIds)
-        ? flatten(toArray(pendingTasksByPool))
-        : flatMap(poolIds, poolId => pendingTasksByPool[poolId] || [])
+    poolIds => (isEmpty(poolIds) ? null : ({ $poolId }) => poolIds.includes($poolId))
   )
 
-  _getFinishedTasks = createFilter(
-    () => this.state.finishedTasks,
-    createSelector(
-      createSelector(() => this.state.pools, resolveIds),
-      poolIds => (isEmpty(poolIds) ? null : ({ $poolId }) => poolIds.includes($poolId))
-    )
-  )
+  _getTasks = createFilter(() => this.props.resolvedPendingTasks, this._getPoolFilter)
+
+  _getFinishedTasks = createFilter(() => this.state.finishedTasks, this._getPoolFilter)
 
   _getItemsPerPageContainer = () => this.state.itemsPerPageContainer
 
-  _setItemsPerPageContainer = itemsPerPageContainer => this.setState({ itemsPerPageContainer })
-
   render() {
     const { props } = this
-    const { intl, nTasks, pools } = props
+    const { intl, nResolvedTasks, pools } = props
     const { formatMessage } = intl
 
     return (
-      <Page header={HEADER} title={`(${nTasks}) ${formatMessage(messages.taskPage)}`}>
+      <Page header={HEADER} title={`(${nResolvedTasks}) ${formatMessage(messages.taskPage)}`}>
+        <h2>{_('poolTasks')}</h2>
         <Container>
           <Row className='mb-1'>
             <Col mediumSize={7}>
               <SelectPool multi onChange={this.linkState('pools')} />
             </Col>
             <Col mediumSize={4}>
-              <div ref={container => this.setState({ container })} />
+              <div ref={container => this.setState({ filterContainer: container })} />
             </Col>
             <Col mediumSize={1}>
-              <div ref={this._setItemsPerPageContainer} />
+              <div ref={container => this.setState({ itemsPerPageContainer: container })} />
             </Col>
           </Row>
           <Row>
@@ -311,9 +356,9 @@ export default class Tasks extends Component {
                 collection={this._getTasks()}
                 columns={COLUMNS}
                 defaultFilter='filterOutShortTasks'
-                filterContainer={() => this.state.container}
+                filterContainer={() => this.state.filterContainer}
                 filters={FILTERS}
-                itemsPerPageContainer={this._getItemsPerPageContainer}
+                itemsPerPageContainer={() => this.state.itemsPerPageContainer}
                 groupedActions={GROUPED_ACTIONS}
                 individualActions={INDIVIDUAL_ACTIONS}
                 stateUrlParam='s'
@@ -325,12 +370,27 @@ export default class Tasks extends Component {
             <Col>
               <Collapse buttonText={_('previousTasks')}>
                 <SortedTable
+                  className='mt-1'
                   collection={this._getFinishedTasks()}
                   columns={FINISHED_TASKS_COLUMNS}
                   filters={FILTERS}
                   stateUrlParam='s_previous'
                 />
               </Collapse>
+            </Col>
+          </Row>
+        </Container>
+        <h2 className='mt-2'>{_('xoTasks')}</h2>
+        <Container>
+          <Row>
+            <Col>
+              <SortedTable
+                actions={XO_TASKS_ACTIONS}
+                collection={props.xoTasks}
+                columns={XO_TASKS_COLUMNS}
+                individualActions={XO_TASKS_INDIVIDUAL_ACTIONS}
+                stateUrlParam='s_xo'
+              />
             </Col>
           </Row>
         </Container>

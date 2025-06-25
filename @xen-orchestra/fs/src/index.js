@@ -5,20 +5,21 @@ import RemoteHandlerLocal from './local'
 import RemoteHandlerNfs from './nfs'
 import RemoteHandlerS3 from './s3'
 import RemoteHandlerSmb from './smb'
-import RemoteHandlerSmbMount from './smb-mount'
+import RemoteHandlerAzure from './azure'
+export { DEFAULT_ENCRYPTION_ALGORITHM, UNENCRYPTED_ALGORITHM, isLegacyEncryptionAlgorithm } from './_encryptor'
 
 const HANDLERS = {
   file: RemoteHandlerLocal,
   nfs: RemoteHandlerNfs,
   s3: RemoteHandlerS3,
+  azure: RemoteHandlerAzure,
+  azurite: RemoteHandlerAzure,
 }
 
 try {
   execa.sync('mount.cifs', ['-V'])
-  HANDLERS.smb = RemoteHandlerSmbMount
-} catch (_) {
   HANDLERS.smb = RemoteHandlerSmb
-}
+} catch (_) {}
 
 export const getHandler = (remote, ...rest) => {
   const Handler = HANDLERS[parse(remote.url).type]

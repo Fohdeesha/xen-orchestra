@@ -31,6 +31,10 @@
     "lodash": "^4.17.4"
   },
   "scripts": {
-    "postversion": "npm publish"
+    "postversion": "npm publish",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "sinon": "^18.0.0"
   }
 }

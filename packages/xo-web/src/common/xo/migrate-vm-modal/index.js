@@ -2,6 +2,7 @@ import BaseComponent from 'base-component'
 import every from 'lodash/every'
 import find from 'lodash/find'
 import forEach from 'lodash/forEach'
+import isEmpty from 'lodash/isEmpty'
 import map from 'lodash/map'
 import React from 'react'
 import store from 'store'
@@ -81,21 +82,16 @@ export default class MigrateVmModalBody extends BaseComponent {
     )
 
     this._getTargetNetworkPredicate = createSelector(
-      createPicker(
-        () => this.props.pifs,
-        () => this.state.host.$PIFs
-      ),
-      pifs => {
-        if (!pifs) {
-          return false
-        }
-
-        const networks = {}
-        forEach(pifs, pif => {
-          networks[pif.$network] = true
+      () => this.props.networks,
+      () => this.state.host.$poolId,
+      (networks, poolId) => {
+        const _networks = {}
+        forEach(networks, network => {
+          if (network.$poolId === poolId) {
+            _networks[network.id] = true
+          }
         })
-
-        return network => networks[network.id]
+        return isEmpty(_networks) ? false : network => _networks[network.id]
       }
     )
 
@@ -126,6 +122,7 @@ export default class MigrateVmModalBody extends BaseComponent {
       migrationNetwork: this.state.migrationNetworkId,
       sr: resolveId(this.state.targetSrs.mainSr),
       targetHost: this.state.host && this.state.host.id,
+      srRequired: !this.state.doNotMigrateVdis,
     }
   }
 
@@ -226,14 +223,14 @@ export default class MigrateVmModalBody extends BaseComponent {
             </Col>
           </SingleLineRow>
         </div>
-        {host && (!doNotMigrateVdis || migrationNetworkId != null) && (
+        {host && (
           <div className={styles.groupBlock}>
             <SingleLineRow>
               <Col size={12}>
                 <ChooseSrForEachVdisModal
                   mainSrPredicate={this._getSrPredicate()}
                   onChange={this.linkState('targetSrs')}
-                  required
+                  required={!doNotMigrateVdis}
                   value={targetSrs}
                   vdis={vdis}
                 />

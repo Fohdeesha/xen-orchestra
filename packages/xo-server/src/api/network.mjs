@@ -1,28 +1,35 @@
 import xapiObjectToXo from '../xapi-object-to-xo.mjs'
 
+const RFC_MINIMUM_MTU = 68 // see RFC 791
+
 export function getBondModes() {
   return ['balance-slb', 'active-backup', 'lacp']
 }
 
-export async function create({ pool, name, description, pif, mtu = 1500, vlan = 0 }) {
-  return xapiObjectToXo(
-    await this.getXapi(pool).createNetwork({
-      name,
-      description,
-      pifId: pif && this.getObject(pif, 'PIF')._xapiId,
-      mtu: +mtu,
-      vlan: +vlan,
-    })
-  ).id
+export async function create({ pool, name, description, pif, mtu = 1500, vlan = 0, nbd }) {
+  const network = await this.getXapi(pool).createNetwork({
+    name,
+    description,
+    pifId: pif && this.getObject(pif, 'PIF')._xapiId,
+    mtu: +mtu,
+    vlan,
+  })
+
+  if (nbd) {
+    await network.add_purpose('nbd')
+  }
+
+  return xapiObjectToXo(network).id
 }
 
 create.params = {
   pool: { type: 'string' },
   name: { type: 'string' },
-  description: { type: 'string', optional: true },
+  nbd: { type: 'boolean', optional: true },
+  description: { type: 'string', minLength: 0, optional: true },
   pif: { type: 'string', optional: true },
-  mtu: { type: ['integer', 'string'], optional: true },
-  vlan: { type: ['integer', 'string'], optional: true },
+  mtu: { type: 'integer', optional: true, minimum: RFC_MINIMUM_MTU },
+  vlan: { type: 'integer', optional: true },
 }
 
 create.resolve = {
@@ -44,19 +51,15 @@ export async function createBonded({ pool, name, description, pifs, mtu = 1500, 
 createBonded.params = {
   pool: { type: 'string' },
   name: { type: 'string' },
-  description: { type: 'string', optional: true },
+  description: { type: 'string', minLength: 0, optional: true },
   pifs: {
     type: 'array',
     items: {
       type: 'string',
     },
   },
-  mtu: { type: ['integer', 'string'], optional: true },
-  // RegExp since schema-inspector does not provide a param check based on an enumeration
-  bondMode: {
-    type: 'string',
-    pattern: new RegExp(`^(${getBondModes().join('|')})$`),
-  },
+  mtu: { type: 'integer', optional: true, minimum: RFC_MINIMUM_MTU },
+  bondMode: { enum: getBondModes() },
 }
 
 createBonded.resolve = {
@@ -71,16 +74,24 @@ export async function set({
 
   automatic,
   defaultIsLocked,
+  mtu,
   name_description: nameDescription,
   name_label: nameLabel,
+  nbd,
 }) {
   network = this.getXapiObject(network)
 
   await Promise.all([
     automatic !== undefined && network.update_other_config('automatic', automatic ? 'true' : null),
     defaultIsLocked !== undefined && network.set_default_locking_mode(defaultIsLocked ? 'disabled' : 'unlocked'),
+    mtu !== undefined && network.$setMtu(mtu),
     nameDescription !== undefined && network.set_name_description(nameDescription),
     nameLabel !== undefined && network.set_name_label(nameLabel),
+    nbd !== undefined &&
+      Promise.all([
+        network.remove_purpose('insecure_nbd'),
+        nbd ? network.add_purpose('nbd') : network.remove_purpose('nbd'),
+      ]),
   ])
 }
 
@@ -96,12 +107,22 @@ set.params = {
   id: {
     type: 'string',
   },
+  mtu: {
+    type: 'integer',
+    minimum: RFC_MINIMUM_MTU,
+    optional: true,
+  },
   name_description: {
     type: 'string',
+    minLength: 0,
     optional: true,
   },
   name_label: {
     type: 'string',
+    optional: true,
+  },
+  nbd: {
+    type: 'boolean',
     optional: true,
   },
 }
@@ -112,7 +133,7 @@ set.resolve = {
 
 // =================================================================
 
-export async function delete_({ network }) {
+async function delete_({ network }) {
   return this.getXapi(network).deleteNetwork(network._xapiId)
 }
 export { delete_ as delete }

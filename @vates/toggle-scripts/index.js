@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+'use strict'
+
 const fs = require('fs')
 
 const mapKeys = (object, iteratee) => {
@@ -28,6 +30,7 @@ if (args.length === 0) {
 
 ${name} v${version}
 `)
+  // eslint-disable-next-line n/no-process-exit
   process.exit()
 }
 

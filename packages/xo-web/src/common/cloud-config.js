@@ -1,6 +1,6 @@
 import _ from 'intl'
 import React from 'react'
-import { map } from 'lodash'
+import map from 'lodash/map.js'
 
 import Icon from './icon'
 import Tooltip from './tooltip'
@@ -8,7 +8,7 @@ import { alert } from './modal'
 
 const AVAILABLE_TEMPLATE_VARS = {
   '{name}': 'templateNameInfo',
-  '%': 'templateIndexInfo',
+  '{index}': 'templateIndexInfo',
 }
 
 const showAvailableTemplateVars = () =>
@@ -34,7 +34,7 @@ const showNetworkConfigInfo = () =>
         {_('newVmNetworkConfigInfo', {
           noCloudDatasourceLink: (
             <a
-              href='https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html#datasource-nocloud'
+              href='https://cloudinit.readthedocs.io/en/latest/reference/datasources/nocloud.html'
               rel='noopener noreferrer'
               target='_blank'
             >
@@ -47,7 +47,7 @@ const showNetworkConfigInfo = () =>
         {_('newVmNetworkConfigDocLink', {
           networkConfigDocLink: (
             <a
-              href='https://cloudinit.readthedocs.io/en/latest/topics/network-config-format-v1.html'
+              href='https://cloudinit.readthedocs.io/en/latest/reference/network-config-format-v1.html#network-config-v1'
               rel='noopener noreferrer'
               target='_blank'
             >
@@ -76,7 +76,7 @@ export const NetworkConfigInfo = () => (
 )
 
 export const DEFAULT_CLOUD_CONFIG_TEMPLATE =
-  '#cloud-config\n#hostname: {name}%\n#ssh_authorized_keys:\n#  - ssh-rsa <myKey>\n#packages:\n#  - htop\n'
+  '#cloud-config\n#hostname: {name}{index}\n#ssh_authorized_keys:\n#  - ssh-rsa <myKey>\n#packages:\n#  - htop\n'
 
 // SOURCE: https://cloudinit.readthedocs.io/en/latest/topics/network-config-format-v1.html
 export const DEFAULT_NETWORK_CONFIG_TEMPLATE = `#network:

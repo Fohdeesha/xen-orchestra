@@ -11,7 +11,13 @@ export const configurationSchema = {
     'Important: When registering your instance to your identity provider, you must configure its callback URL to `https://<xo.company.net>/signin/saml/callback`!',
   type: 'object',
   properties: {
+    callbackUrl: {
+      title: 'callbackUrl',
+      description: 'the callback URL',
+      type: 'string',
+    },
     cert: {
+      $multiline: true,
       title: 'Certificate',
       description: "Copy/paste the identity provider's certificate",
       type: 'string',
@@ -40,6 +46,12 @@ You should try \`http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddr
       default: DEFAULTS.disableRequestedAuthnContext,
       type: 'boolean',
     },
+    forceAuthn: {
+      title: 'Force re-authentication',
+      description: 'Request the identity provider to authenticate the user, even if they possess a valid session.',
+      default: false,
+      type: 'boolean',
+    },
   },
   required: ['cert', 'entryPoint', 'issuer', 'usernameField'],
 }
@@ -60,10 +72,9 @@ class AuthSamlXoPlugin {
     this._conf = {
       ...this._strategyOptions,
       ...DEFAULTS,
-      ...conf,
-
-      // must match the callback URL
       path: '/signin/saml/callback',
+
+      ...conf,
     }
 
     if (loaded) {

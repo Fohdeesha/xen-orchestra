@@ -21,13 +21,13 @@ import {
   subscribeResourceCatalog,
   subscribeVolumeInfo,
   updateXosanPacks,
+  EXPIRES_SOON_DELAY,
 } from 'xo'
 
 import NewXosan from './new-xosan'
 import CreationProgress from './creation-progress'
 
 export const INFO_TYPES = ['heal', 'status', 'info', 'statusDetail', 'hosts']
-const EXPIRES_SOON_DELAY = 30 * 24 * 60 * 60 * 1000 // 1 month
 
 // ==================================================================
 
@@ -120,7 +120,7 @@ const XOSAN_COLUMNS = [
     sortCriteria: sr => (sr.physical_usage * 100) / sr.size,
   },
   {
-    name: _('xosanLicense'),
+    name: _('license'),
     itemRenderer: (sr, { isAdmin, licensesByXosan, licenseError }) => {
       if (licenseError !== undefined) {
         return
@@ -132,7 +132,10 @@ const XOSAN_COLUMNS = [
       if (license === undefined) {
         return (
           <span className='text-danger'>
-            {_('xosanUnknownSr')} <a href='https://xen-orchestra.com/'>{_('contactUs')}</a>
+            {_('xosanUnknownSr')}{' '}
+            <a href='https://xen-orchestra.com/' target='_blank' rel='noreferrer'>
+              {_('contactUs')}
+            </a>
           </span>
         )
       }
@@ -141,7 +144,10 @@ const XOSAN_COLUMNS = [
       if (license === null) {
         return (
           <span className='text-danger'>
-            {_('xosanMultipleLicenses')} <a href='https://xen-orchestra.com/'>{_('contactUs')}</a>
+            {_('xosanMultipleLicenses')}{' '}
+            <a href='https://xen-orchestra.com/' target='_blank' rel='noreferrer'>
+              {_('contactUs')}
+            </a>
           </span>
         )
       }
@@ -155,20 +161,20 @@ const XOSAN_COLUMNS = [
             '✔'
           ) : expired ? (
             <span>
-              {_('licenseHasExpired')} {isAdmin && <Link to='/xoa/licenses'>{_('xosanUpdateLicenseMessage')}</Link>}
+              {_('licenseHasExpired')} {isAdmin && <Link to='/xoa/licenses'>{_('updateLicenseMessage')}</Link>}
             </span>
           ) : (
             <span className={expiresSoon && 'text-danger'}>
-              {_('xosanLicenseExpiresDate', {
+              {_('licenseExpiresDate', {
                 date: <ShortDate timestamp={license.expires} />,
               })}{' '}
-              {expiresSoon && isAdmin && <Link to='/xoa/licenses'>{_('xosanUpdateLicenseMessage')}</Link>}
+              {expiresSoon && isAdmin && <Link to='/xoa/licenses'>{_('updateLicenseMessage')}</Link>}
             </span>
           )}
         </span>
       ) : (
         <span>
-          {_('xosanNoLicense')} <Link to='/xoa/licenses'>{_('xosanUnlockNow')}</Link>
+          {_('xosanNoLicense')} <Link to='/xoa/licenses'>{_('unlockNow')}</Link>
         </span>
       )
     },
@@ -415,7 +421,7 @@ export default class Xosan extends Component {
                 licenseError !== undefined && (
                   <Row>
                     <Col>
-                      <em className='text-danger'>{_('xosanGetLicensesError')}</em>
+                      <em className='text-danger'>{_('getLicensesError')}</em>
                     </Col>
                   </Row>
                 ),

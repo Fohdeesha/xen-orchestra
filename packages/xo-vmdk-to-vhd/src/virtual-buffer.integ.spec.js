@@ -3,7 +3,7 @@
 import { createReadStream, readFile } from 'fs-extra'
 import { exec } from 'child-process-promise'
 import { pFromCallback } from 'promise-toolbox'
-import rimraf from 'rimraf'
+import { rimraf } from 'rimraf'
 import tmp from 'tmp'
 
 import { VirtualBuffer } from './virtual-buffer'
@@ -18,7 +18,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const tmpDir = process.cwd()
   process.chdir(initialDir)
-  await pFromCallback(cb => rimraf(tmpDir, cb))
+  await rimraf(tmpDir)
 })
 
 test('Virtual Buffer can read a file correctly', async () => {

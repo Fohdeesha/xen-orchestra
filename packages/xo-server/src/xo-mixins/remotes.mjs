@@ -1,42 +1,77 @@
 import asyncMapSettled from '@xen-orchestra/async-map/legacy.js'
+import Obfuscate from '@vates/obfuscate'
+import { basename } from 'path'
+import { createLogger } from '@xen-orchestra/log'
 import { format, parse } from 'xo-remote-parser'
-import { getHandler } from '@xen-orchestra/fs'
+import { DEFAULT_ENCRYPTION_ALGORITHM, getHandler, isLegacyEncryptionAlgorithm } from '@xen-orchestra/fs'
 import { ignoreErrors, timeout } from 'promise-toolbox'
-import { noSuchObject } from 'xo-common/api-errors.js'
+import { invalidParameters, noSuchObject } from 'xo-common/api-errors.js'
 import { synchronized } from 'decorator-synchronized'
 
-import * as sensitiveValues from '../sensitive-values.mjs'
 import patch from '../patch.mjs'
 import { Remotes } from '../models/remote.mjs'
+import Disposable from 'promise-toolbox/Disposable'
 
 // ===================================================================
 
+const { warn } = createLogger('xo:mixins:remotes')
+
 const obfuscateRemote = ({ url, ...remote }) => {
   const parsedUrl = parse(url)
-  remote.supportFileRestore = parsedUrl.type !== 's3'
-  remote.url = format(sensitiveValues.obfuscate(parsedUrl))
+  remote.url = format(Obfuscate.obfuscate(parsedUrl))
   return remote
+}
+
+// these properties should be defined on the remote object itself and not as
+// part of the remote URL
+//
+// there is a bug somewhere that keep putting them into the URL, this list
+// is here to help track it
+const INVALID_URL_PARAMS = ['benchmarks', 'id', 'info', 'name', 'proxy', 'enabled', 'error', 'url']
+
+function validateUrl(url) {
+  const parsedUrl = parse(url)
+
+  const { path, encryptionKey, useVhdDirectory } = parsedUrl
+  if (path !== undefined && basename(path) === 'xo-vm-backups') {
+    throw invalidParameters('remote url should not end with xo-vm-backups')
+  }
+
+  for (const param of INVALID_URL_PARAMS) {
+    if (Object.hasOwn(parsedUrl, param)) {
+      // log with stack trace
+      warn(new Error('invalid remote URL param ' + param))
+    }
+  }
+
+  const hasEncryption = encryptionKey !== undefined
+  const hasVhdDirectory = useVhdDirectory === true
+  if (hasEncryption && !hasVhdDirectory) {
+    throw invalidParameters('Encryption must be used with VHD directory (data blocks)')
+  }
 }
 
 export default class {
   constructor(app) {
     this._handlers = { __proto__: null }
-    this._remotes = new Remotes({
-      connection: app._redis,
-      prefix: 'xo:remote',
-      indexes: ['enabled'],
-    })
     this._remotesInfo = {}
     this._app = app
 
     app.hooks.on('clean', () => this._remotes.rebuildIndexes())
-    app.hooks.on('start', async () => {
+    app.hooks.on('core started', () => {
+      this._remotes = new Remotes({
+        connection: app._redis,
+        namespace: 'remote',
+        indexes: ['enabled'],
+      })
+
       app.addConfigManager(
         'remotes',
         () => this._remotes.get(),
-        remotes => Promise.all(remotes.map(remote => this._remotes.update(remote)))
+        remotes => this._remotes.update(remotes)
       )
-
+    })
+    app.hooks.on('start', async () => {
       const remotes = await this._remotes.get()
       remotes.forEach(remote => {
         ignoreErrors.call(this.updateRemote(remote.id, {}))
@@ -46,6 +81,7 @@ export default class {
       const handlers = this._handlers
       for (const id in handlers) {
         try {
+          delete handlers[id]
           await handlers[id].forget()
         } catch (_) {}
       }
@@ -74,9 +110,9 @@ export default class {
 
       try {
         await handler.sync()
-        ignoreErrors.call(this._updateRemote(id, { error: '' }))
+        ignoreErrors.call(this._updateRemote(id, { error: null }))
       } catch (error) {
-        ignoreErrors.call(this._updateRemote(id, { error: error.message }))
+        ignoreErrors.call(this._updateRemote(id, { error }))
         throw error
       }
 
@@ -103,7 +139,7 @@ export default class {
         writeRate,
       }
       await this._updateRemote(remoteId, {
-        error: '',
+        error: null,
         benchmarks:
           remote.benchmarks !== undefined
             ? [...remote.benchmarks.slice(-49), benchmark] // store 50 benchmarks
@@ -125,6 +161,17 @@ export default class {
         return
       }
 
+      let encryption
+
+      if (this._handlers[remote.id] !== undefined) {
+        const algorithm = this._handlers[remote.id].encryptionAlgorithm
+        encryption = {
+          algorithm,
+          isLegacy: isLegacyEncryptionAlgorithm(algorithm),
+          recommendedAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+        }
+      }
+
       const promise =
         remote.proxy !== undefined
           ? this._app.callProxyMethod(remote.proxy, 'remote.getInfo', {
@@ -135,7 +182,10 @@ export default class {
       try {
         await timeout.call(
           promise.then(info => {
-            remotesInfo[remote.id] = info
+            remotesInfo[remote.id] = {
+              ...info,
+              encryption,
+            }
           }),
           5e3
         )
@@ -153,13 +203,33 @@ export default class {
     if (remote === undefined) {
       throw noSuchObject(id, 'remote')
     }
-    return remote.properties
+
+    const parsedUrl = parse(remote.url)
+    let fixed = false
+    for (const param of INVALID_URL_PARAMS) {
+      if (Object.hasOwn(parsedUrl, param)) {
+        // delete the value to trace its real origin when it's added back
+        // with `updateRemote()`
+        delete parsedUrl[param]
+        fixed = true
+      }
+    }
+    if (fixed) {
+      remote.url = format(parsedUrl)
+      this._remotes.update(remote).catch(warn)
+    }
+
+    return remote
   }
 
   async getRemoteWithCredentials(id) {
     const remote = await this._getRemote(id)
     if (!remote.enabled) {
       throw new Error('remote is disabled')
+    }
+    const parsedRemote = parse(remote.url)
+    if (parsedRemote.type === 's3') {
+      await this._app.checkFeatureAuthorization('BACKUP.S3')
     }
     return remote
   }
@@ -169,6 +239,8 @@ export default class {
   }
 
   async createRemote({ name, options, proxy, url }) {
+    validateUrl(url)
+
     const params = {
       enabled: false,
       error: '',
@@ -180,10 +252,14 @@ export default class {
       params.options = options
     }
     const remote = await this._remotes.add(params)
-    return /* await */ this.updateRemote(remote.get('id'), { enabled: true })
+    return /* await */ this.updateRemote(remote.id, { enabled: true })
   }
 
   updateRemote(id, { enabled, name, options, proxy, url }) {
+    if (url !== undefined) {
+      validateUrl(url)
+    }
+
     const handlers = this._handlers
     const handler = handlers[id]
     if (handler !== undefined) {
@@ -202,24 +278,42 @@ export default class {
 
   @synchronized()
   async _updateRemote(id, { url, ...props }) {
+    if (url !== undefined) {
+      validateUrl(url)
+    }
+
     const remote = await this._getRemote(id)
 
     // url is handled separately to take care of obfuscated values
     if (typeof url === 'string') {
-      remote.url = format(sensitiveValues.merge(parse(url), parse(remote.url)))
+      remote.url = format(Obfuscate.merge(parse(url), parse(remote.url)))
     }
 
     patch(remote, props)
 
-    return (await this._remotes.update(remote)).properties
+    return await this._remotes.update(remote)
   }
 
   async removeRemote(id) {
-    const handler = this._handlers[id]
+    const handlers = this._handlers
+    const handler = handlers[id]
     if (handler !== undefined) {
+      delete handlers[id]
       ignoreErrors.call(handler.forget())
     }
 
     await this._remotes.remove(id)
+  }
+
+  async getTotalBackupSizeOnRemote(id) {
+    const remote = await this._getRemote(id)
+
+    if (remote.proxy !== undefined) {
+      return this._app.callProxyMethod(remote.proxy, 'remote.getTotalBackupSize', {
+        remote,
+      })
+    }
+
+    return Disposable.use(this._app.getBackupsRemoteAdapter(remote), adapter => adapter.getTotalBackupSize())
   }
 }

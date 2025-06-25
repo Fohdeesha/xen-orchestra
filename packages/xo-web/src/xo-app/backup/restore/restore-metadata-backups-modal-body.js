@@ -5,9 +5,10 @@ import PropTypes from 'prop-types'
 import React from 'react'
 import SingleLineRow from 'single-line-row'
 import StateButton from 'state-button'
-import { Container, Col } from 'grid'
-import { FormattedDate } from 'react-intl'
+import { Container, Col, Row } from 'grid'
+import { NumericDate } from 'utils'
 import { Select } from 'form'
+import { SelectPool } from 'select-objects'
 
 const restorationWarning = (
   <p className='text-warning mt-1'>
@@ -22,25 +23,15 @@ export default class RestoreMetadataBackupModalBody extends Component {
   }
 
   get value() {
-    return this.state.backup
+    return this.state
   }
 
-  _optionRenderer = ({ timestamp }) => (
-    <FormattedDate
-      value={new Date(timestamp)}
-      month='long'
-      day='numeric'
-      year='numeric'
-      hour='2-digit'
-      minute='2-digit'
-      second='2-digit'
-    />
-  )
+  _optionRenderer = ({ timestamp }) => <NumericDate timestamp={timestamp} />
 
   render() {
     return (
       <Container>
-        <SingleLineRow>
+        <Row>
           <Col size={6}>{_('chooseBackup')}</Col>
           <Col size={6}>
             <Select
@@ -53,8 +44,13 @@ export default class RestoreMetadataBackupModalBody extends Component {
               valueKey='id'
             />
           </Col>
-        </SingleLineRow>
-        {this.props.type !== 'XO' && <SingleLineRow>{restorationWarning}</SingleLineRow>}
+        </Row>
+        {this.props.type !== 'XO' && [
+          <Row className='mt-1' key='select'>
+            <SelectPool onChange={this.linkState('pool')} required value={this.state.pool} />
+          </Row>,
+          <SingleLineRow key='message'>{restorationWarning}</SingleLineRow>,
+        ]}
       </Container>
     )
   }
@@ -63,30 +59,43 @@ export default class RestoreMetadataBackupModalBody extends Component {
 export class RestoreMetadataBackupsBulkModalBody extends Component {
   static propTypes = {
     nMetadataBackups: PropTypes.number,
+    poolMetadataBackups: PropTypes.array,
   }
 
   state = { latest: true }
 
   get value() {
-    return this.state.latest
+    return this.state
   }
 
   render() {
     return (
-      <div>
-        {_('bulkRestoreMetadataBackupMessage', {
-          nMetadataBackups: this.props.nMetadataBackups,
-          oldestOrLatest: (
-            <StateButton
-              disabledLabel={_('oldest')}
-              enabledLabel={_('latest')}
-              handler={this.toggleState('latest')}
-              state={this.state.latest}
-            />
-          ),
-        })}
+      <Container>
+        <Row>
+          {_('bulkRestoreMetadataBackupMessage', {
+            nMetadataBackups: this.props.nMetadataBackups,
+            oldestOrLatest: (
+              <StateButton
+                disabledLabel={_('oldest')}
+                enabledLabel={_('latest')}
+                handler={this.toggleState('latest')}
+                state={this.state.latest}
+              />
+            ),
+          })}
+        </Row>
+        {this.props.poolMetadataBackups.map(value => (
+          <Container key={value.id} className='mt-1'>
+            <SingleLineRow>
+              <Col size={6}>{value.first.jobName}</Col>
+              <Col size={6}>
+                <SelectPool onChange={this.linkState(value.id)} required value={this.state[value.id]} />
+              </Col>
+            </SingleLineRow>
+          </Container>
+        ))}
         {restorationWarning}
-      </div>
+      </Container>
     )
   }
 }

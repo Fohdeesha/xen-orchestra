@@ -19,6 +19,7 @@
     "node": ">=7.6"
   },
   "scripts": {
-    "postversion": "npm publish --access public"
+    "postversion": "npm publish --access public",
+    "test": "node --test"
   }
 }

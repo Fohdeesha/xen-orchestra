@@ -1,7 +1,39 @@
 import JSON5 from 'json5'
 import { createSchedule } from '@xen-orchestra/cron'
+import { createLogger } from '@xen-orchestra/log'
 import { filter, forOwn, map, mean } from 'lodash'
 import { utcParse } from 'd3-time-format'
+import assert from 'node:assert'
+const logger = createLogger('xo:xo-server-perf-alert')
+
+const PARAMS_JSON_SCHEMA = [
+  {
+    properties: {
+      uuids: { type: 'array', minItems: 1 },
+      smartMode: { anyOf: [{ not: {} }, { const: false }] },
+      // we allow smartMode=false with excludeUuids=true because UI is not very clear, and we can't enforce smartMode value when excludeUuids=true
+      excludeUuids: { anyOf: [{ not: {} }, { const: true }, { const: false }] },
+    },
+    required: ['uuids'],
+  },
+  // "smartMode" can be true ONLY if "uuids" is NOT defined OR if "excludeUuids" is true
+  {
+    properties: {
+      smartMode: { const: true },
+      // after being edited, uuids will be an empty list instead of undefined
+      uuids: { anyOf: [{ not: {} }, { type: 'array', maxItems: 0 }] },
+    },
+    required: ['smartMode'],
+  },
+  {
+    properties: {
+      uuids: { type: 'array', minItems: 1 },
+      smartMode: { const: true },
+      excludeUuids: { const: true },
+    },
+    required: ['uuids', 'smartMode', 'excludeUuids'],
+  },
+]
 
 const XAPI_TO_XENCENTER = {
   cpuUsage: 'cpu_usage',
@@ -24,7 +56,7 @@ const VM_FUNCTIONS = {
       const filteredLegends = legend.filter(l => l.name.match(regex))
       const accumulator = Object.assign(...filteredLegends.map(l => ({ [l.name]: [] })))
       const getDisplayableValue = () => {
-        const means = Object.keys(accumulator).map(l => mean(accumulator[l]))
+        const means = Object.keys(accumulator).map(l => mean(accumulator[l].map(Number)))
         return Math.max(...means) * 100
       }
       return {
@@ -51,7 +83,12 @@ const VM_FUNCTIONS = {
       return {
         parseRow: data => {
           const memory = data.values[memoryBytesLegend.index]
-          usedMemoryRatio.push((memory - 1024 * data.values[memoryKBytesFreeLegend.index]) / memory)
+          // some VM don't have this counter
+          usedMemoryRatio.push(
+            memoryKBytesFreeLegend === undefined
+              ? 0
+              : (memory - 1024 * data.values[memoryKBytesFreeLegend.index]) / memory
+          )
         },
         getDisplayableValue,
         shouldAlarm: () => COMPARATOR_FN[comparator](getDisplayableValue(), threshold),
@@ -71,7 +108,7 @@ const HOST_FUNCTIONS = {
       const filteredLegends = legend.filter(l => l.name.match(regex))
       const accumulator = Object.assign(...filteredLegends.map(l => ({ [l.name]: [] })))
       const getDisplayableValue = () => {
-        const means = Object.keys(accumulator).map(l => mean(accumulator[l]))
+        const means = Object.keys(accumulator).map(l => mean(accumulator[l].map(Number)))
         return Math.max(...means) * 100
       }
       return {
@@ -163,7 +200,14 @@ export const configurationSchema = {
             description: 'When enabled, all running hosts will be considered for the alert.',
             default: false,
           },
+          excludeUuids: {
+            description: 'If set to true, selected host will not be monitored.',
+            title: 'Exclude hosts',
+            type: 'boolean',
+          },
           uuids: {
+            description:
+              'List of hosts to monitor if "All running hosts" is disabled, or to not monitor if "Exclude hosts" is enabled.',
             title: 'Hosts',
             type: 'array',
             items: {
@@ -196,16 +240,7 @@ export const configurationSchema = {
             enum: [60, 600],
           },
         },
-        oneOf: [
-          {
-            properties: { uuids: {} },
-            required: ['uuids'],
-          },
-          {
-            properties: { smartMode: { const: true } },
-            required: ['smartMode'],
-          },
-        ],
+        oneOf: PARAMS_JSON_SCHEMA,
       },
     },
     vmMonitors: {
@@ -223,7 +258,14 @@ export const configurationSchema = {
             description: 'When enabled, all running VMs will be considered for the alert.',
             default: false,
           },
+          excludeUuids: {
+            description: 'If set to true, selected VMs will not be considered for the alert.',
+            title: 'Exclude VMs',
+            type: 'boolean',
+          },
           uuids: {
+            description:
+              'List of VMs to monitor if "All running VMs" is disabled, or to not monitor if "Exclude VMs" is enabled.',
             title: 'Virtual Machines',
             type: 'array',
             items: {
@@ -256,16 +298,7 @@ export const configurationSchema = {
             enum: [60, 600],
           },
         },
-        oneOf: [
-          {
-            properties: { uuids: {} },
-            required: ['uuids'],
-          },
-          {
-            properties: { smartMode: { const: true } },
-            required: ['smartMode'],
-          },
-        ],
+        oneOf: PARAMS_JSON_SCHEMA,
       },
     },
     srMonitors: {
@@ -283,7 +316,14 @@ export const configurationSchema = {
             description: 'When enabled, all SRs will be considered for the alert.',
             default: false,
           },
+          excludeUuids: {
+            description: 'If set to true, selected SRs will not be considered for the alert.',
+            title: 'Exclude SRs',
+            type: 'boolean',
+          },
           uuids: {
+            description:
+              'List of SRs to monitor if "All SRs" is disabled, or to not monitor if "Exclude SRs" is enabled.',
             title: 'SRs',
             type: 'array',
             items: {
@@ -308,16 +348,7 @@ export const configurationSchema = {
             default: 80,
           },
         },
-        oneOf: [
-          {
-            properties: { uuids: {} },
-            required: ['uuids'],
-          },
-          {
-            properties: { smartMode: { const: true } },
-            required: ['smartMode'],
-          },
-        ],
+        oneOf: PARAMS_JSON_SCHEMA,
       },
     },
     toEmails: {
@@ -357,6 +388,8 @@ async function getServerTimestamp(xapi, host) {
   const serverLocalTime = await xapi.call('host.get_servertime', host.$ref)
   return Math.floor(utcParse('%Y%m%dT%H:%M:%SZ')(serverLocalTime).getTime() / 1000)
 }
+
+const isSrWritable = sr => sr !== undefined && sr.content_type !== 'iso' && sr.size > 0
 
 class PerfAlertXoPlugin {
   constructor(xo) {
@@ -418,7 +451,7 @@ ${monitorBodies.join('\n')}`
     )
   }
 
-  _parseDefinition(definition) {
+  _parseDefinition(definition, cache) {
     const { objectType } = definition
     const lcObjectType = objectType.toLowerCase()
     const alarmId = `${lcObjectType}|${definition.variableName}|${definition.alarmTriggerLevel}`
@@ -470,13 +503,30 @@ ${monitorBodies.join('\n')}`
       snapshot: async () => {
         return Promise.all(
           map(
-            definition.smartMode
-              ? filter(
-                  this._xo.getObjects(),
-                  obj =>
-                    obj.type === objectType &&
-                    ((objectType !== 'VM' && objectType !== 'host') || obj.power_state === 'Running')
-                ).map(obj => obj.uuid)
+            definition.smartMode || definition.excludeUuids
+              ? filter(this._xo.getObjects(), obj => {
+                  if (obj.type !== objectType) {
+                    return false
+                  }
+
+                  if (
+                    (definition.smartMode || definition.excludeUuids) &&
+                    (objectType === 'VM' || objectType === 'host') &&
+                    obj.power_state !== 'Running'
+                  ) {
+                    return false
+                  }
+
+                  if (definition.excludeUuids && definition.uuids.includes(obj.uuid)) {
+                    return false
+                  }
+
+                  if (objectType === 'SR' && !isSrWritable(obj)) {
+                    return false
+                  }
+
+                  return true
+                }).map(obj => obj.uuid)
               : definition.uuids,
             async uuid => {
               try {
@@ -493,7 +543,7 @@ ${monitorBodies.join('\n')}`
 
                 if (typeFunction.createGetter === undefined) {
                   // Stats via RRD
-                  result.rrd = await this.getRrd(result.object, observationPeriod)
+                  result.rrd = await this.getRrd(result.object, observationPeriod, cache)
                   if (result.rrd !== null) {
                     const data = parseData(result.rrd, result.object.uuid)
                     Object.assign(result, {
@@ -516,14 +566,43 @@ ${monitorBodies.join('\n')}`
                   })
                 }
 
-                result.listItem = `  * ${result.objectLink}: ${
-                  result.value === undefined
-                    ? "**Can't read performance counters**"
-                    : result.value.toFixed(1) + typeFunction.unit
-                }\n`
+                const isManagementAgentDetected = (vm, guestMetrics) => {
+                  if ((vm.power_state !== 'Running' && vm.power_state !== 'Paused') || guestMetrics === undefined) {
+                    return
+                  }
+
+                  const { major, minor } = guestMetrics.PV_drivers_version
+                  const hasPvVersion = major !== undefined && minor !== undefined
+                  return hasPvVersion || guestMetrics.other['feature-static-ip-setting'] === '1'
+                }
+
+                const getListItem = () => {
+                  if (result.value == null) {
+                    return "**Can't read performance counters**"
+                  }
+
+                  // VM RAM usage is reported by the VM itself through guest tools. If guest tools are not installed, ignore RAM usage stats
+                  if (lcObjectType === 'vm' && definition.variableName === 'memoryUsage') {
+                    const vm = result.object
+                    const guestMetrics = this._xo.getXapi(uuid).getObject(vm.guest_metrics)
+                    const managementAgentDetected = isManagementAgentDetected(vm, guestMetrics)
+
+                    if (managementAgentDetected === undefined) {
+                      return "**Can't read performance counters**"
+                    }
+                    if (managementAgentDetected === false) {
+                      return '**Guest tools must be installed**'
+                    }
+                  }
+
+                  return result.value.toFixed(1) + typeFunction.unit
+                }
+
+                result.listItem = `  * ${result.objectLink}: ${getListItem()}\n`
 
                 return result
-              } catch (_) {
+              } catch (error) {
+                logger.warn(error)
                 return {
                   uuid,
                   object: null,
@@ -539,8 +618,9 @@ ${monitorBodies.join('\n')}`
   }
 
   _getMonitors() {
-    return map(this._configuration.hostMonitors, def => this._parseDefinition({ ...def, objectType: 'host' }))
-      .concat(map(this._configuration.vmMonitors, def => this._parseDefinition({ ...def, objectType: 'VM' })))
+    const cache = {}
+    return map(this._configuration.hostMonitors, def => this._parseDefinition({ ...def, objectType: 'host' }, cache))
+      .concat(map(this._configuration.vmMonitors, def => this._parseDefinition({ ...def, objectType: 'VM' }, cache)))
       .concat(map(this._configuration.srMonitors, def => this._parseDefinition({ ...def, objectType: 'SR' })))
   }
 
@@ -585,10 +665,14 @@ ${monitorBodies.join('\n')}`
 
       const entriesWithMissingStats = []
       for (const entry of snapshot) {
+        //  can happen when the user forgets to remove an element that doesn't exist anymore from the list of the monitored machines
+        if (entry.object === null) continue
         if (entry.value === undefined) {
           entriesWithMissingStats.push(entry)
           continue
         }
+        // Ignore special SRs (e.g. *XCP-ng Tools*, *DVD drives*, etc) as their usage is always 100%
+        if (entry.object.physical_size <= 0 && entry.object.content_type === 'iso') continue
 
         const raiseAlarm = _alarmId => {
           // sample XenCenter message (linebreaks are meaningful):
@@ -664,28 +748,63 @@ ${entriesWithMissingStats.map(({ listItem }) => listItem).join('\n')}`
     }
   }
 
-  async getRrd(xapiObject, secondsAgo) {
+  async getRrd(xapiObject, secondsAgo, hostCache = {}) {
     const host = xapiObject.$type === 'host' ? xapiObject : xapiObject.$resident_on
     if (host == null) {
       return null
     }
-    // we get the xapi per host, because the alarms can check VMs in various pools
     const xapi = this._xo.getXapi(host.uuid)
-    const serverTimestamp = await getServerTimestamp(xapi, host)
-    const payload = {
-      host,
-      query: {
-        cf: 'AVERAGE',
-        host: (xapiObject.$type === 'host').toString(),
-        json: 'true',
-        start: serverTimestamp - secondsAgo,
-      },
+    if (hostCache[host.uuid] === undefined) {
+      hostCache[host.uuid] = getServerTimestamp(xapi, host)
+        .then(serverTimestamp => {
+          const payload = {
+            host,
+            query: {
+              cf: 'AVERAGE',
+              host: 'true',
+              json: 'true',
+              start: serverTimestamp - secondsAgo,
+            },
+          }
+          return xapi.getResource('/rrd_updates', payload)
+        })
+        .then(res => res.body.text())
+        .then(text => JSON5.parse(text))
+        .catch(err => {
+          delete hostCache[host.uuid]
+          throw err
+        })
     }
-    if (xapiObject.$type === 'VM') {
-      payload.vm_uuid = xapiObject.uuid
+    // reuse an existing/in flight query
+    const json = await hostCache[host.uuid]
+    const results = {
+      meta: { ...json.meta, legend: [] },
+      data: [],
     }
-    // JSON is not well formed, can't use the default node parser
-    return JSON5.parse(await (await xapi.getResource('/rrd_updates', payload)).readAll())
+    if (json.data.length > 0) {
+      // copy only the data relevant the object
+      const data = [...json.data]
+
+      let firstPass = true
+      json.meta.legend.forEach((legend, index) => {
+        const [, , /* type */ uuidInStat /* metricType */] = /^AVERAGE:([^:]+):(.+):(.+)$/.exec(legend)
+        if (uuidInStat !== xapiObject.uuid) {
+          return
+        }
+        results.meta.legend.push(legend)
+        let timestampIndex = 0
+        for (const { t, values } of data) {
+          if (firstPass) {
+            results.data.push({ t, values: [] })
+          }
+          assert.strictEqual(results.data[timestampIndex].t, t)
+          results.data[timestampIndex].values.push(values[index])
+          timestampIndex++
+        }
+        firstPass = false
+      })
+    }
+    return results
   }
 }
 

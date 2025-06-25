@@ -1,5 +1,6 @@
 import { createSchedule } from '@xen-orchestra/cron'
 import { intersection, uniq } from 'lodash'
+import { limitConcurrency } from 'limit-concurrency-decorator'
 
 import DensityPlan from './density-plan'
 import PerformancePlan from './performance-plan'
@@ -11,6 +12,8 @@ import { EXECUTION_DELAY, debug } from './utils'
 
 const PERFORMANCE_MODE = 0
 const DENSITY_MODE = 1
+const SIMPLE_MODE = 2
+const MODES = { 'Performance mode': PERFORMANCE_MODE, 'Density mode': DENSITY_MODE, 'Simple mode': SIMPLE_MODE }
 
 // ===================================================================
 
@@ -34,7 +37,7 @@ export const configurationSchema = {
           },
 
           mode: {
-            enum: ['Performance mode', 'Density mode', 'Simple mode'],
+            enum: Object.keys(MODES),
             title: 'Mode',
           },
 
@@ -87,6 +90,20 @@ export const configurationSchema = {
               $type: 'Tag',
             },
           },
+
+          // when UI will allow it, put balanceVcpu option outside performance mode
+          // balanceVcpus is an incorrect name kept for compatibility with past configurationSchema
+          balanceVcpus: {
+            enum: [false, 'preventive', true],
+            enumNames: [
+              'Conservative: only balance hosts when exceeding CPU or memory thresholds (default)',
+              'Preventive: balance hosts when exceeding thresholds and when pool CPU values are too disparate',
+              'vCPU balancing: balance hosts when exceeding thresholds and pre-position VMs on hosts to balance vCPU/CPU ratio',
+            ],
+            title: 'Performance plan behaviour',
+            description: 'Optional features for performance plan',
+            default: false,
+          },
         },
 
         required: ['name', 'mode', 'pools'],
@@ -102,6 +119,20 @@ export const configurationSchema = {
       items: {
         type: 'string',
         $type: 'Tag',
+      },
+    },
+    advanced: {
+      title: 'Advanced',
+      type: 'object',
+      default: {},
+      properties: {
+        maxConcurrentMigrations: {
+          default: 2,
+          description: 'Limit maximum number of simultaneous migrations for faster migrations',
+          minimum: 1,
+          title: 'Maximum concurrent migrations',
+          type: 'integer',
+        },
       },
     },
   },
@@ -124,14 +155,15 @@ class LoadBalancerPlugin {
     })
   }
 
-  async configure({ plans, ignoredVmTags = [] }) {
+  async configure({ plans, advanced, ignoredVmTags = [] }) {
     this._plans = []
     this._poolIds = [] // Used pools.
     this._globalOptions = { ignoredVmTags: new Set(ignoredVmTags) }
+    this._concurrentMigrationLimiter = limitConcurrency(advanced.maxConcurrentMigrations)()
 
     if (plans) {
       for (const plan of plans) {
-        this._addPlan(plan.mode === 'Performance mode' ? PERFORMANCE_MODE : DENSITY_MODE, plan)
+        this._addPlan(MODES[plan.mode], plan)
       }
     }
   }
@@ -149,17 +181,17 @@ class LoadBalancerPlugin {
 
     // Check already used pools.
     if (intersection(pools, this._poolIds).length > 0) {
-      throw new Error(`Pool(s) already included in an other plan: ${pools}`)
+      throw new Error(`Pool(s) already included in another plan: ${pools}`)
     }
 
     this._poolIds = this._poolIds.concat(pools)
     let plan
     if (mode === PERFORMANCE_MODE) {
-      plan = new PerformancePlan(this.xo, name, pools, options, this._globalOptions)
+      plan = new PerformancePlan(this.xo, name, pools, options, this._globalOptions, this._concurrentMigrationLimiter)
     } else if (mode === DENSITY_MODE) {
-      plan = new DensityPlan(this.xo, name, pools, options, this._globalOptions)
+      plan = new DensityPlan(this.xo, name, pools, options, this._globalOptions, this._concurrentMigrationLimiter)
     } else {
-      plan = new SimplePlan(this.xo, name, pools, options, this._globalOptions)
+      plan = new SimplePlan(this.xo, name, pools, options, this._globalOptions, this._concurrentMigrationLimiter)
     }
     this._plans.push(plan)
   }

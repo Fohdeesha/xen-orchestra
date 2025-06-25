@@ -1,5 +1,4 @@
 /_book/
-/coverage/
 /node_modules/
 /lerna-debug.log
 /lerna-debug.log.*
@@ -8,12 +7,10 @@
 /@vates/*/node_modules/
 /@xen-orchestra/*/dist/
 /@xen-orchestra/*/node_modules/
+/@xen-orchestra/rest-api/open-api/spec/swagger.json
+/@xen-orchestra/rest-api/src/open-api/routes/routes.ts
 /packages/*/dist/
 /packages/*/node_modules/
-
-/@xen-orchestra/proxy/src/app/mixins/index.mjs
-
-/packages/vhd-cli/src/commands/index.js
 
 /packages/xen-api/examples/node_modules/
 /packages/xen-api/plot.dat
@@ -35,6 +32,12 @@ pnpm-debug.log.*
 yarn-error.log
 yarn-error.log.*
 .env
+*.tsbuildinfo
 
-# nyc test coverage
-.nyc_output
+# code coverage
+.nyc_output/
+coverage/
+.turbo/
+
+# https://node-tap.org/dot-tap-folder/
+.tap/

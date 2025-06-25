@@ -25,6 +25,7 @@ function parseDescriptor(descriptorSlice) {
       extentList.push({
         access: items[0],
         sizeSectors: items[1],
+        size: items[1] * 512,
         type: items[2],
         name: items[3],
         offset: items.length > 4 ? items[4] : 0,
@@ -64,7 +65,7 @@ function alignSectors(number) {
 }
 
 export default class VMDKDirectParser {
-  constructor(readStream, grainLogicalAddressList, grainFileOffsetList, gzipped = false) {
+  constructor(readStream, grainLogicalAddressList, grainFileOffsetList, gzipped = false, length) {
     if (gzipped) {
       const unzipStream = zlib.createGunzip()
       readStream.pipe(unzipStream)
@@ -74,6 +75,7 @@ export default class VMDKDirectParser {
     this.grainFileOffsetList = grainFileOffsetList
     this.virtualBuffer = new VirtualBuffer(readStream)
     this.header = null
+    this._length = length
   }
 
   // I found a VMDK file whose L1 and L2 table did not have a marker, but they were at the top
@@ -185,6 +187,11 @@ export default class VMDKDirectParser {
       const grainPosition = this.grainFileOffsetList[tableIndex] * SECTOR_SIZE
       const grainSizeBytes = this.header.grainSizeSectors * SECTOR_SIZE
       const lba = this.grainLogicalAddressList[tableIndex] * grainSizeBytes
+      assert.strictEqual(
+        grainPosition >= position,
+        true,
+        `Grain position ${grainPosition} must be after current position ${position}`
+      )
       await this.virtualBuffer.readChunk(grainPosition - position, `blank from ${position} to ${grainPosition}`)
       let grain
       if (this.header.flags.hasMarkers) {
@@ -193,6 +200,17 @@ export default class VMDKDirectParser {
         grain = await this.virtualBuffer.readChunk(grainSizeBytes, 'grain ' + this.virtualBuffer.position)
       }
       yield { logicalAddressBytes: lba, data: grain }
+    }
+    // drain remaining
+    // stream.resume does not seems to be enough to consume completely the stream
+    // especially when this stream is part of a tar ( ova) , potentially gzipped
+    if (this._length !== undefined) {
+      while (this.virtualBuffer.position < this._length) {
+        await this.virtualBuffer.readChunk(
+          Math.min(this._length - this.virtualBuffer.position, 1024 * 1024),
+          'draining'
+        )
+      }
     }
   }
 }

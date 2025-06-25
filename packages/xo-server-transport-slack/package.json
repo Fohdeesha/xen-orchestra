@@ -1,6 +1,6 @@
 {
   "name": "xo-server-transport-slack",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "license": "AGPL-3.0-or-later",
   "description": "xo-server plugin to send messages to Slack/Mattermost",
   "keywords": [
@@ -29,15 +29,14 @@
     "node": ">=6"
   },
   "dependencies": {
-    "promise-toolbox": "^0.21.0",
-    "slack-node": "^0.1.8"
+    "@slack/webhook": "^7.0.1"
   },
   "devDependencies": {
     "@babel/cli": "^7.0.0",
     "@babel/core": "^7.0.0",
     "@babel/preset-env": "^7.0.0",
     "cross-env": "^7.0.2",
-    "rimraf": "^3.0.0"
+    "rimraf": "^5.0.1"
   },
   "scripts": {
     "build": "cross-env NODE_ENV=production babel --source-maps --out-dir=dist/ src/",

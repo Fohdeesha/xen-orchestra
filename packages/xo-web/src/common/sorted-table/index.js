@@ -168,8 +168,12 @@ const handleFnProps = (prop, items, userData) => (typeof prop === 'function' ? p
 const CollapsedActions = decorate([
   withRouter,
   provideState({
+    initialState: () => ({
+      runningActions: [],
+    }),
     effects: {
       async execute(state, { handler, label, redirectOnSuccess }) {
+        this.state.runningActions = [...this.state.runningActions, label]
         try {
           await handler()
           ifDef(redirectOnSuccess, this.props.router.push)
@@ -183,18 +187,25 @@ const CollapsedActions = decorate([
               _error(label, defined(error.message, String(error)))
             }
           }
+        } finally {
+          this.state.runningActions = this.state.runningActions.filter(action => action !== label)
         }
       },
     },
     computed: {
+      wrappedActions: ({ runningActions }, { actions }) =>
+        actions.map(action => {
+          action.isRunning = runningActions.includes(action.label)
+          return action
+        }),
       dropdownId: generateId,
-      actions: (_, { actions, items, userData }) =>
-        actions.map(({ disabled, grouped, handler, icon, label, level, redirectOnSuccess }) => {
+      actions: ({ wrappedActions: actions }, { items, userData }) =>
+        actions.map(({ disabled, grouped, handler, icon, isRunning, label, level, redirectOnSuccess }) => {
           const actionItems = Array.isArray(items) || !grouped ? items : [items]
           return {
-            disabled: handleFnProps(disabled, actionItems, userData),
+            disabled: isRunning || handleFnProps(disabled, actionItems, userData),
             handler: () => handler(actionItems, userData),
-            icon: handleFnProps(icon, actionItems, userData),
+            icon: isRunning ? 'loading' : handleFnProps(icon, actionItems, userData),
             label: handleFnProps(label, actionItems, userData),
             level: handleFnProps(level, actionItems, userData),
             redirectOnSuccess: handleFnProps(redirectOnSuccess, actionItems, userData),
@@ -314,7 +325,7 @@ class SortedTable extends Component {
           })
 
     const state = (this.state = {
-      all: false, // whether all items are selected (accross pages)
+      all: false, // whether all items are selected (across pages)
       itemsPerPage: +defined(cookies.get(`${props.location.pathname}-${props.stateUrlParam}`), DEFAULT_ITEMS_PER_PAGE),
     })
 
@@ -741,6 +752,11 @@ class SortedTable extends Component {
     const { location, stateUrlParam } = this.props
     this.setState({ itemsPerPage })
     cookies.set(`${location.pathname}-${stateUrlParam}`, itemsPerPage)
+
+    // changing the number of items per page should send back to the first page
+    //
+    // see https://github.com/vatesfr/xen-orchestra/issues/7350
+    this._setPage(1)
   }
 
   render() {
@@ -791,7 +807,7 @@ class SortedTable extends Component {
     const userData = this._getUserData()
 
     return (
-      <div>
+      <div className={props.className}>
         {shortcutsTarget !== undefined && (
           <Shortcuts
             handler={this._getShortcutsHandler()}

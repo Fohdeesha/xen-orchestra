@@ -7,7 +7,7 @@ import Icon from 'icon'
 import marked from 'marked'
 import React from 'react'
 import { Card, CardBlock, CardHeader } from 'card'
-import { escapeRegExp } from 'lodash'
+import escapeRegExp from 'lodash/escapeRegExp.js'
 import { form } from 'modal'
 import { connectStore } from 'utils'
 import { createGetObjectsOfType } from 'selectors'
@@ -21,8 +21,7 @@ import RecipeForm from './recipe-form'
 const RECIPE_INFO = {
   id: '05abc8a8-ebf4-41a6-b1ed-efcb2dbf893d',
   name: 'Kubernetes cluster',
-  description:
-    'Creates a Kubernetes cluster composed of 1 master and a configurable number of nodes working for the master.',
+  description: 'Creates a Kubernetes cluster composed of a configurable number of control planes and worker nodes.',
 }
 
 export default decorate([
@@ -42,7 +41,7 @@ export default decorate([
           defaultValue: {
             pool: {},
           },
-          render: props => <RecipeForm {...props} />,
+          render: props => <RecipeForm {...props} value={{ nbNodes: 1, ...props.value }} />,
           header: (
             <span>
               <Icon icon='hub-recipe' /> {RECIPE_INFO.name}
@@ -51,20 +50,43 @@ export default decorate([
           size: 'medium',
         })
 
-        const { cidr, masterName, nbNodes, network, sr, sshKey } = recipeParams
+        const {
+          clusterName,
+          controlPlaneIpAddress,
+          controlPlaneIpAddresses,
+          controlPlanePoolSize,
+          gatewayIpAddress,
+          k8sVersion,
+          nameservers,
+          nbNodes,
+          network,
+          searches,
+          sr,
+          sshKey,
+          vipAddress,
+          workerNodeIpAddresses,
+        } = recipeParams
 
         markRecipeAsCreating(RECIPE_INFO.id)
         const tag = await createKubernetesCluster({
-          cidr,
-          masterName,
+          clusterName,
+          controlPlaneIpAddress,
+          controlPlaneIpAddresses,
+          controlPlanePoolSize,
+          gatewayIpAddress,
+          k8sVersion,
+          nameservers,
           nbNodes: +nbNodes,
           network: network.id,
+          searches,
           sr: sr.id,
           sshKey,
+          vipAddress,
+          workerNodeIpAddresses,
         })
         markRecipeAsDone(RECIPE_INFO.id)
 
-        const filter = new ComplexMatcher.Property('tags', new ComplexMatcher.RegExp(`^${escapeRegExp(tag)}$`, 'i'))
+        const filter = new ComplexMatcher.Property('tags', new ComplexMatcher.RegExp(`^${escapeRegExp(tag)}$`))
 
         success(
           _('recipeCreatedSuccessfully'),

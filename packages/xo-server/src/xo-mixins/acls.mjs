@@ -12,13 +12,13 @@ export default class {
   constructor(app) {
     this._app = app
 
-    const aclsDb = (this._acls = new Acls({
-      connection: app._redis,
-      prefix: 'xo:acl',
-      indexes: ['subject', 'object'],
-    }))
+    app.hooks.on('core started', () => {
+      const aclsDb = (this._acls = new Acls({
+        connection: app._redis,
+        namespace: 'acl',
+        indexes: ['subject', 'object'],
+      }))
 
-    app.hooks.on('start', () => {
       app.addConfigManager(
         'acls',
         () => aclsDb.get(),
@@ -28,6 +28,7 @@ export default class {
     })
 
     app.hooks.on('clean', async () => {
+      const aclsDb = this._acls
       const acls = await aclsDb.get()
       const toRemove = []
       forEach(acls, ({ subject, object, action, id }) => {
@@ -98,11 +99,19 @@ export default class {
     return permissions
   }
 
-  async checkPermissions(userId, permissions) {
-    const user = await this._app.getUser(userId)
+  async checkPermissions(permissions, userId) {
+    let permission
+    if (userId !== undefined) {
+      ;({ permission } = await this._app.getUser(userId))
+    } else {
+      ;({
+        permission,
+        user: { id: userId },
+      } = this._app.apiContext)
+    }
 
     // Special case for super XO administrators.
-    if (user.permission === 'admin') {
+    if (permission === 'admin') {
       return true
     }
 

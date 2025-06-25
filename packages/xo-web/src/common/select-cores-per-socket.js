@@ -2,7 +2,7 @@ import _ from 'intl'
 import PropTypes from 'prop-types'
 import React from 'react'
 import { injectState, provideState } from 'reaclette'
-import { omit } from 'lodash'
+import omit from 'lodash/omit.js'
 
 import decorate from './apply-decorators'
 import Icon from './icon'
@@ -93,10 +93,10 @@ const SelectCoresPerSocket = decorate([
             state.valueExceedsCoresLimit
               ? _('vmCoresPerSocketExceedsCoresLimit', { maxCores })
               : state.valueExceedsSocketsLimit
-              ? _('vmCoresPerSocketExceedsSocketsLimit', {
-                  maxSockets: MAX_VM_SOCKETS,
-                })
-              : _('vmCoresPerSocketNotDivisor')
+                ? _('vmCoresPerSocketExceedsSocketsLimit', {
+                    maxSockets: MAX_VM_SOCKETS,
+                  })
+                : _('vmCoresPerSocketNotDivisor')
           }
         >
           <Icon icon='error' size='lg' />

@@ -209,7 +209,7 @@ export default {
   // Original text: "Welcome on Xen Orchestra!"
   homeWelcome: 'Bem-vindo ao Xen Orchestra',
 
-  // Original text: "Add your XenServer hosts or pools"
+  // Original text: "Add your XCP-ng hosts or pools"
   homeWelcomeText: 'Adicione seu XenServer hosts e pools',
 
   // Original text: "Want some help?"
@@ -1296,9 +1296,6 @@ export default {
   // Original text: 'Invalid parameters'
   configIpErrorTitle: undefined,
 
-  // Original text: 'IP address and netmask required'
-  configIpErrorMessage: undefined,
-
   // Original text: 'Static IP address'
   staticIp: undefined,
 
@@ -2279,8 +2276,8 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: 'Enviar para SR:',
 
-  // Original text: "VMs to import"
-  vmsToImport: 'Importar VMs',
+  // Original text: "VM{nVms, plural, one {} other {s}} to import"
+  vmsToImport: 'Importar VM{nVms, plural, one {} other {s}} ',
 
   // Original text: "Reset"
   importVmsCleanList: 'Reiniciar',
@@ -2297,7 +2294,7 @@ export default {
   // Original text: "Export starting…"
   startVmExport: 'Iniciando exportação…',
 
-  // Original text: 'N CPUs'
+  // Original text: 'Number of CPUs'
   nCpus: undefined,
 
   // Original text: 'Memory'
@@ -2729,12 +2726,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'Xen Orchestra',
 
-  // Original text: "server"
-  xenOrchestraServer: 'servidor',
-
-  // Original text: "web client"
-  xenOrchestraWeb: 'cliente web',
-
   // Original text: "No pro support provided!"
   noProSupport: 'Nenhum suporte pro fornecido!',
 
@@ -2849,8 +2840,8 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: 'Nenhuma atualização disponível para a versão Community Edition',
 
-  // Original text: "Please consider subscribe and try it with all features for free during 15 days on"
-  noUpdaterSubscribe: 'Oi, inscreva-se e venha testar todos nossos recursos e serviços gratuitamente por 15 dias!',
+  // Original text: "Please consider subscribe and try it with all features for free during 30 days on"
+  noUpdaterSubscribe: 'Oi, inscreva-se e venha testar todos nossos recursos e serviços gratuitamente por 30 dias!',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning:

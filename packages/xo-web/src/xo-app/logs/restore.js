@@ -9,14 +9,14 @@ import SortedTable from 'sorted-table'
 import Tooltip from 'tooltip'
 import { alert } from 'modal'
 import { Card, CardHeader, CardBlock } from 'card'
-import { connectStore, formatSize, formatSpeed } from 'utils'
+import { connectStore, formatSize, formatSpeed, NumericDate } from 'utils'
 import { createGetObjectsOfType } from 'selectors'
 import { filter, keyBy } from 'lodash'
 import { get } from '@xen-orchestra/defined'
 import { subscribeBackupNgLogs, subscribeBackupNgJobs } from 'xo'
 import { Vm, Sr } from 'render-xo-item'
 
-import { STATUS_LABELS, LOG_FILTERS, LogDate } from './utils'
+import { STATUS_LABELS, LOG_FILTERS } from './utils'
 
 const showRestoreError = ({ currentTarget: { dataset } }) =>
   alert(
@@ -39,7 +39,7 @@ const COLUMNS = [
   },
   {
     name: _('logsBackupTime'),
-    itemRenderer: ({ data: { time } }) => <LogDate time={time} />,
+    itemRenderer: ({ data: { time } }) => <NumericDate timestamp={time} />,
     sortCriteria: 'data.time',
   },
   {
@@ -58,7 +58,7 @@ const COLUMNS = [
   {
     default: true,
     name: _('logsRestoreTime'),
-    itemRenderer: log => <LogDate time={log.start} />,
+    itemRenderer: log => <NumericDate timestamp={log.start} />,
     sortCriteria: 'start',
     sortOrder: 'desc',
   },
@@ -117,6 +117,14 @@ const COLUMNS = [
   },
 ]
 
+const INDIVIDUAL_ACTIONS = [
+  {
+    handler: task => window.open('./rest/v0/restore/logs/' + task.id),
+    icon: 'api',
+    label: _('taskOpenRawLog'),
+  },
+]
+
 const ROW_TRANSFORM = (task, { vms }) => {
   let vm, dataSize
   if (task.status === 'success') {
@@ -156,6 +164,7 @@ export default decorate([
           data-vms={vms}
           emptyMessage={_('noLogs')}
           filters={LOG_FILTERS}
+          individualActions={INDIVIDUAL_ACTIONS}
           rowTransform={ROW_TRANSFORM}
           stateUrlParam='s_logs'
         />

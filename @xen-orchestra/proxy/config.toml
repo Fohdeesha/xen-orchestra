@@ -13,37 +13,20 @@ resourceCacheDelay = '5m'
 [api]
 keepAliveInterval = 10e3
 
+# This [backups] section and its subsections ([backups.defaultSettings], [backups.vm.defaultSettings], [backups.metadata.defaultSettings]) are passed to @xen-orchestra/backups
+# See https://github.com/vatesfr/xen-orchestra/blob/master/%40xen-orchestra/backups/README.md#changing-the-default-backup-configuration
 [backups]
 # Mode to use for newly created backup directories
 #
 # https://en.wikipedia.org/wiki/File-system_permissions#Numeric_notation
 dirMode = 0o700
+# Disables VHD merges running in background
 disableMergeWorker = false
 snapshotNameLabelTpl = '[XO Backup {job.name}] {vm.name_label}'
 vhdDirectoryCompression = 'brotli'
 
-[backups.defaultSettings]
-reportWhen = 'failure'
 
-[backups.metadata.defaultSettings]
-retentionPoolMetadata = 0
-retentionXoMetadata = 0
-
-[backups.vm.defaultSettings]
-bypassVdiChainsCheck = false
-checkpointSnapshot = false
-concurrency = 2
-copyRetention = 0
-deleteFirst = false
-exportRetention = 0
-fullInterval = 0
-offlineBackup = false
-offlineSnapshot = false
-snapshotRetention = 0
-timeout = 0
-vmTimeout = 0
-
-# This is a work-around.
+# This is a workaround.
 #
 # See https://github.com/vatesfr/xen-orchestra/pull/4674
 maxMergedDeltasPerRun = 2
@@ -51,7 +34,7 @@ maxMergedDeltasPerRun = 2
 # Each `http.listen.<name>` entry defines a specific listening configuration for
 # the HTTP server.
 #
-# `<name>` can be freely choosen.
+# `<name>` can be freely chosen.
 [http.listen.https]
 
 # Generate self-signed certificate if missing
@@ -81,13 +64,8 @@ timeout = 600e3
 disableFileRemotes = true
 
 [xapiOptions]
-# VDIs with `[NOBAK]` flag can be ignored while snapshotting an halted VM.
-#
-# This is disabled by default for the time being but will be turned on after enough testing.
-ignoreNobakVdis = false
-
 maxUncoalescedVdis = 1
-watchEvents = ['network', 'PIF', 'pool', 'SR', 'task', 'VBD', 'VDI', 'VIF', 'VM']
+watchEvents = ['network', 'PIF', 'pool', 'SR', 'task', 'VBD', 'VDI', 'VIF', 'VM', 'VM_guest_metrics']
 
 
 
@@ -95,13 +73,13 @@ watchEvents = ['network', 'PIF', 'pool', 'SR', 'task', 'VBD', 'VDI', 'VIF', 'VM'
 [reverseProxies]
 # '/http/' = 'http://localhost:8081/'
 #The target can have a path ( like `http://target/sub/directory/`),
-# parameters (`?param=one`) and hash (`#jwt:32154`) that are automatically added to all queries transfered by the proxy.
+# parameters (`?param=one`) and hash (`#jwt:32154`) that are automatically added to all queries transferred by the proxy.
 # If a parameter is present in the configuration and in the query, only the config parameter is transferred.
 # '/another' = http://hiddenServer:8765/path/
 
 # And use the extended mode when required
-# The additionnal options of a proxy's configuraiton's section are used to instantiate the `https` Agent(respectively the `http`).
-# A notable option is `rejectUnauthorized` which allow to connect to a HTTPS backend  with an invalid/ self signed certificate
+# The additional options of a proxy's configuration's section are used to instantiate the `https` Agent(respectively the `http`).
+# A notable option is `rejectUnauthorized` which allow to connect to a HTTPS backend  with an invalid/ self-signed certificate
 #[reverseProxies.'/https/']
 # target = 'https://localhost:8080/'
 # rejectUnauthorized = false

@@ -16,20 +16,23 @@ import {
   subscribeNotifications,
   subscribePermissions,
   subscribeProxies,
-  subscribeProxiesApplianceUpdaterState,
+  subscribeProxyApplianceUpdaterState,
   subscribeResourceSets,
+  subscribeSrsUnhealthyVdiChainsLength,
+  VDIS_TO_COALESCE_LIMIT,
 } from 'xo'
 import {
   createFilter,
   createGetObjectsOfType,
   createSelector,
   getIsPoolAdmin,
+  getResolvedPendingTasks,
   getStatus,
   getUser,
   getXoaState,
   isAdmin,
 } from 'selectors'
-import { every, forEach, identity, isEmpty, isEqual, map, pick, some } from 'lodash'
+import { countBy, every, forEach, identity, isEmpty, isEqual, map, pick, size, some } from 'lodash'
 
 import styles from './index.css'
 
@@ -42,18 +45,19 @@ const returnTrue = () => true
 @connectStore(
   () => {
     const getHosts = createGetObjectsOfType('host')
-    return {
-      hosts: getHosts,
-      isAdmin,
-      isPoolAdmin: getIsPoolAdmin,
-      nHosts: getHosts.count(),
-      nTasks: createGetObjectsOfType('task').count([task => task.status === 'pending']),
-      pools: createGetObjectsOfType('pool'),
-      srs: createGetObjectsOfType('SR'),
-      status: getStatus,
-      user: getUser,
-      xoaState: getXoaState,
-    }
+    return (state, props) => ({
+      hosts: getHosts(state, props),
+      isAdmin: isAdmin(state, props),
+      isPoolAdmin: getIsPoolAdmin(state, props),
+      nHosts: getHosts.count()(state, props),
+      // true: useResourceSet to bypass permissions
+      nResolvedTasks: getResolvedPendingTasks(state, props, true).length,
+      pools: createGetObjectsOfType('pool')(state, props),
+      srs: createGetObjectsOfType('SR')(state, props),
+      status: getStatus(state, props),
+      user: getUser(state, props),
+      xoaState: getXoaState(state, props),
+    })
   },
   {
     withRef: true,
@@ -67,6 +71,7 @@ const returnTrue = () => true
       cb(map(proxies, 'id').sort())
     }),
   resourceSets: subscribeResourceSets,
+  unhealthyVdiChainsLength: subscribeSrsUnhealthyVdiChainsLength,
 })
 @injectState
 export default class Menu extends Component {
@@ -106,7 +111,10 @@ export default class Menu extends Component {
     () => this.state.proxyStates,
     proxyStates => some(proxyStates, state => state.endsWith('-upgrade-needed'))
   )
-
+  _getNProxiesErrors = createSelector(
+    () => this.state.proxyStates,
+    proxyStates => countBy(proxyStates).error
+  )
   _checkPermissions = createSelector(
     () => this.props.isAdmin,
     () => this.props.permissions,
@@ -135,6 +143,12 @@ export default class Menu extends Component {
     missingPatches => some(missingPatches, _ => _)
   )
 
+  _hasUnhealthyVdis = createSelector(
+    () => this.state.unhealthyVdiChainsLength,
+    unhealthyVdiChainsLength =>
+      some(unhealthyVdiChainsLength, vdiChainsLength => size(vdiChainsLength) >= VDIS_TO_COALESCE_LIMIT)
+  )
+
   _toggleCollapsed = event => {
     event.preventDefault()
     this._removeListener()
@@ -161,7 +175,7 @@ export default class Menu extends Component {
         this.setState(state => ({
           missingPatches: {
             ...state.missingPatches,
-            [host.id]: patches.length > 0,
+            [host.id]: patches != null && patches.length > 0,
           },
         }))
       })
@@ -180,7 +194,7 @@ export default class Menu extends Component {
     }))
 
     const unsubs = map(this.props.proxyIds, proxyId =>
-      subscribeProxiesApplianceUpdaterState(proxyId, ({ state: proxyState = '' }) => {
+      subscribeProxyApplianceUpdaterState(proxyId, ({ state: proxyState = '' }) => {
         this.setState(state => ({
           proxyStates: {
             ...state.proxyStates,
@@ -198,13 +212,22 @@ export default class Menu extends Component {
   }
 
   render() {
-    const { isAdmin, isPoolAdmin, nTasks, state, status, user, pools, nHosts, srs, xoaState } = this.props
+    const { isAdmin, isPoolAdmin, nResolvedTasks, state, status, user, pools, nHosts, srs, xoaState } = this.props
     const noOperatablePools = this._getNoOperatablePools()
     const noResourceSets = this._getNoResourceSets()
     const noNotifications = this._getNoNotifications()
+    const nProxiesErrors = this._getNProxiesErrors()
 
     const missingPatchesWarning = this._hasMissingPatches() ? (
       <Tooltip content={_('homeMissingPatches')}>
+        <span className='text-warning'>
+          <Icon icon='alarm' />
+        </span>
+      </Tooltip>
+    ) : null
+
+    const unhealthyVdisWarning = this._hasUnhealthyVdis() ? (
+      <Tooltip content={_('homeUnhealthyVdis')}>
         <span className='text-warning'>
           <Icon icon='alarm' />
         </span>
@@ -247,6 +270,7 @@ export default class Menu extends Component {
         to: '/dashboard/overview',
         icon: 'menu-dashboard',
         label: 'dashboardPage',
+        extra: [unhealthyVdisWarning],
         subMenu: [
           {
             to: '/dashboard/overview',
@@ -267,6 +291,7 @@ export default class Menu extends Component {
             to: '/dashboard/health',
             icon: 'menu-dashboard-health',
             label: 'overviewHealthDashboardPage',
+            extra: [unhealthyVdisWarning],
           },
         ],
       },
@@ -284,6 +309,11 @@ export default class Menu extends Component {
             to: '/backup/overview',
             icon: 'menu-backup-overview',
             label: 'backupOverviewPage',
+          },
+          {
+            to: '/backup/sequences',
+            icon: 'menu-backup-sequence',
+            label: 'sequences',
           },
           {
             to: '/backup/new',
@@ -394,7 +424,7 @@ export default class Menu extends Component {
           {
             to: '/settings/config',
             icon: 'menu-settings-config',
-            label: 'settingsConfigPage',
+            label: 'xoConfig',
           },
         ],
       },
@@ -447,17 +477,25 @@ export default class Menu extends Component {
                 ]}
               />
             </Tooltip>
+          ) : nProxiesErrors > 0 ? (
+            <Tooltip content={_('someProxiesHaveErrors', { n: nProxiesErrors })}>
+              <span className='tag tag-pill tag-danger'>{nProxiesErrors}</span>
+            </Tooltip>
           ) : null,
         ],
       },
       isAdmin && { to: '/about', icon: 'menu-about', label: 'aboutPage' },
-      !noOperatablePools && {
+      {
         to: '/tasks',
         icon: 'task',
         label: 'taskMenu',
-        pill: nTasks,
+        pill: nResolvedTasks,
       },
-      isAdmin && { to: '/xosan', icon: 'menu-xosan', label: 'xosan' },
+      isAdmin && {
+        to: '/xostor',
+        label: 'xostor',
+        icon: 'menu-xostor',
+      },
       !noOperatablePools && {
         to: '/import/vm',
         icon: 'menu-new-import',
@@ -472,6 +510,11 @@ export default class Menu extends Component {
             to: '/import/disk',
             icon: 'disk',
             label: 'labelDisk',
+          },
+          {
+            to: '/import/vmware',
+            icon: 'vm',
+            label: 'fromVmware',
           },
         ],
       },

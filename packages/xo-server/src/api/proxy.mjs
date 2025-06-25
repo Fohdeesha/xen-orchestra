@@ -15,12 +15,17 @@ register.params = {
     type: 'string',
     optional: true,
   },
+  vmUuid: {
+    type: 'string',
+    optional: true,
+  },
   name: {
     type: 'string',
     optional: true,
   },
   authenticationToken: {
     type: 'string',
+    optional: true,
   },
 }
 register.resolve = {
@@ -148,12 +153,16 @@ deploy.resolve = {
   sr: ['sr', 'SR', 'administrate'],
 }
 
-export function upgradeAppliance({ id, ignoreRunningJobs }) {
-  return this.upgradeProxyAppliance(id, ignoreRunningJobs)
+export function upgradeAppliance({ force, id, ignoreRunningJobs }) {
+  return this.upgradeProxyAppliance(id, { force, ignoreRunningJobs })
 }
 
 upgradeAppliance.permission = 'admin'
 upgradeAppliance.params = {
+  force: {
+    type: 'boolean',
+    optional: true,
+  },
   id: {
     type: 'string',
   },
@@ -176,7 +185,7 @@ getApplianceUpdaterState.params = {
 
 export async function checkHealth({ id }) {
   try {
-    await this.callProxyMethod(id, 'system.getServerVersion')
+    await this.checkProxyHealth(id)
     return {
       success: true,
     }
@@ -197,6 +206,26 @@ checkHealth.params = {
   },
 }
 
+export async function openSupportTunnel({ id }) {
+  await this.callProxyMethod(id, 'appliance.supportTunnel.open')
+
+  for (let i = 0; i < 10; ++i) {
+    const { open, stdout } = await this.callProxyMethod(id, 'appliance.supportTunnel.getState')
+    if (open && stdout.length !== 0) {
+      return stdout
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1e3))
+  }
+
+  throw new Error('could not open support tunnel')
+}
+
+openSupportTunnel.permission = 'admin'
+openSupportTunnel.params = {
+  id: { type: 'string' },
+}
+
 export function updateApplianceSettings({ id, ...props }) {
   return this.updateProxyAppliance(id, props)
 }
@@ -210,4 +239,6 @@ updateApplianceSettings.params = {
     type: ['string', 'null'],
     optional: true,
   },
+  register: { type: 'boolean', optional: true },
+  xoaPassword: { type: 'string', optional: true },
 }

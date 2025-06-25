@@ -1,11 +1,18 @@
-import { isDefaultTemplate } from '@xen-orchestra/xapi'
+import { isDefaultTemplate, parseDateTime } from '@xen-orchestra/xapi'
+import Obfuscate from '@vates/obfuscate'
 
-import * as sensitiveValues from './sensitive-values.mjs'
+import * as xoData from '@xen-orchestra/xapi/xoData.mjs'
 import ensureArray from './_ensureArray.mjs'
+import normalizeVmNetworks from './_normalizeVmNetworks.mjs'
+import semver from 'semver'
+import { compareVersions, validate as validateVersion } from 'compare-versions'
+import { createLogger } from '@xen-orchestra/log'
 import { extractIpFromVmNetworks } from './_extractIpFromVmNetworks.mjs'
 import { extractProperty, forEach, isEmpty, mapFilter, parseXml } from './utils.mjs'
-import { getVmDomainType, isHostRunning, isVmRunning, parseDateTime } from './xapi/index.mjs'
+import { getVmDomainType, isHostRunning, isVmRunning } from './xapi/index.mjs'
 import { useUpdateSystem } from './xapi/utils.mjs'
+
+const { debug, warn } = createLogger('xo:server:xapi-objects-to-xo')
 
 // ===================================================================
 
@@ -52,28 +59,17 @@ function link(obj, prop, idField = '$id') {
   return dynamicValue[idField]
 }
 
-// Parse a string date time to a Unix timestamp (in seconds).
-//
-// If the value is a number or can be converted as one, it is assumed
-// to already be a timestamp and returned.
-//
-// If there are no data or if the timestamp is 0, returns null.
 function toTimestamp(date) {
-  if (!date) {
+  if (date === undefined) {
     return null
   }
 
-  const timestamp = +date
-
-  // Not NaN.
-  // eslint-disable-next-line no-self-compare
-  if (timestamp === timestamp) {
-    return timestamp
+  try {
+    return parseDateTime(date)
+  } catch (error) {
+    warn('toTimestamp', { date, error })
+    return null
   }
-
-  const ms = parseDateTime(date, 0)
-
-  return ms === 0 ? null : Math.round(ms / 1000)
 }
 
 // https://github.com/xenserver/xenadmin/blob/093ab0bcd6c4b3dd69da7b1e63ef34bb807c1ddb/XenModel/XenAPI-Extensions/VM.cs#L773-L827
@@ -98,19 +94,105 @@ const getVmGuestToolsProps = vm => {
   }
 }
 
+// ***** May 2025 - Xen Security Advisory XSA-468 - Windows PV drivers vulnerability *****
+
+// Vendor → (driver → version)
+const XSA468_VULNERABLE_VERSIONS = {
+  Xen_Project: {
+    xencons: '9.1.0.2',
+    xeniface: '9.1.0.0',
+    xenbus: '9.1.0.1',
+  },
+  Amazon_Inc_: {
+    xeniface: '8.3.0',
+  },
+  XenServer: {
+    xeniface: '9.1.12.93',
+    xenbus: '9.1.11.114',
+  },
+  Citrix: {
+    xeniface: '9.1.1.11',
+    xenbus: '9.1.2.14',
+  },
+  XCP_ng: {
+    xencons: '9.0.9048.9047',
+    xeniface: '9.0.9048.9047',
+    xenbus: '9.0.9048.9047',
+  },
+}
+const isVmVulnerable_XSA468 = vm => {
+  if (vm.platform?.device_id !== '0002') {
+    // Not a Windows VM
+    return false
+  }
+
+  const guestMetrics = vm.$guest_metrics
+  if (guestMetrics === undefined) {
+    return false
+  }
+
+  if (!guestMetrics.PV_drivers_detected) {
+    // No PV drivers installed: no vulnerability
+    return false
+  }
+
+  const pvDriversVersion = guestMetrics.PV_drivers_version
+  let versionDetected = false
+  for (const [key, value] of Object.entries(pvDriversVersion)) {
+    if (['major', 'minor', 'micro', 'build'].includes(key)) {
+      continue
+    }
+
+    const [vendor, version] = value.split(' ')
+    if (!validateVersion(version)) {
+      warn(`Invalid version number for ${vendor}: ${key} ${version}`)
+      continue
+    }
+
+    const vendorVulnerableVersion = XSA468_VULNERABLE_VERSIONS[vendor]?.[key]
+    if (vendorVulnerableVersion === undefined) {
+      continue
+    }
+
+    versionDetected = true
+
+    try {
+      if (compareVersions(version, vendorVulnerableVersion) <= 0) {
+        // PV drivers installed and vulnerable version detected
+        return { reason: 'pv-driver-version-vulnerable', driver: key, version }
+      }
+    } catch (err) {
+      warn(err)
+    }
+  }
+
+  // - PV drivers installed and could check safe versions: no vulnerability
+  // - PV drivers installed but could not check versions: potential vulnerability
+  return versionDetected ? false : { reason: 'no-pv-drivers-detected' }
+}
+
+// ***************************************************************************************
+
 // ===================================================================
 
 const TRANSFORMS = {
   pool(obj) {
     const cpuInfo = obj.cpu_info
     return {
+      auto_poweron: obj.other_config.auto_poweron === 'true',
+      crashDumpSr: link(obj, 'crash_dump_SR'),
       current_operations: obj.current_operations,
       default_SR: link(obj, 'default_SR'),
       HA_enabled: Boolean(obj.ha_enabled),
+
+      // ignore undefined VDIs, which occurs if the objects were not fetched/cached yet.
+      haSrs: obj.$ha_statefiles.filter(vdi => vdi !== undefined).map(vdi => link(vdi, 'SR')),
+
       master: link(obj, 'master'),
       tags: obj.tags,
       name_description: obj.name_description,
       name_label: obj.name_label || obj.$master.name_label,
+      migrationCompression: obj.migration_compression,
       xosanPackInstallationTime: toTimestamp(obj.other_config.xosan_pack_installation_time),
       otherConfig: obj.other_config,
       cpus: {
@@ -119,6 +201,8 @@ const TRANSFORMS = {
       },
       suspendSr: link(obj, 'suspend_image_SR'),
       zstdSupported: obj.restrictions.restrict_zstd_export === 'false',
+      vtpmSupported: obj.restrictions.restrict_vtpm === 'false',
+      platform_version: obj.$master.software_version.platform_version,
 
       // TODO
       // - ? networks = networksByPool.items[pool.id] (network.$pool.id)
@@ -197,7 +281,9 @@ const TRANSFORMS = {
       memory: (function () {
         if (metrics) {
           const free = +metrics.memory_free
-          const total = +metrics.memory_total
+          let total = +metrics.memory_total
+          const ONE_GIB = 1024 * 1024 * 1024
+          total = Math.ceil(total / ONE_GIB) * ONE_GIB
 
           return {
             usage: total - free,
@@ -218,6 +304,7 @@ const TRANSFORMS = {
       patches: link(obj, 'patches'),
       powerOnMode: obj.power_on_mode,
       power_state: metrics ? (isRunning ? 'Running' : 'Halted') : 'Unknown',
+      residentVms: link(obj, 'resident_VMs'),
       startTime: toTimestamp(otherConfig.boot_time),
       supplementalPacks:
         supplementalPacks ||
@@ -323,37 +410,33 @@ const TRANSFORMS = {
       }
     })
 
-    const networks = guestMetrics?.networks ?? {}
+    const { creation } = xoData.extract(obj) ?? {}
 
-    // Merge old ipv4 protocol with the new protocol
-    // See: https://github.com/xapi-project/xen-api/blob/324bc6ee6664dd915c0bbe57185f1d6243d9ed7e/ocaml/xapi/xapi_guest_agent.ml#L59-L81
+    let $container
+    if (obj.resident_on !== 'OpaqueRef:NULL') {
+      // resident_on is set when the VM is running (or paused or suspended on a host)
+      $container = link(obj, 'resident_on')
+    } else {
+      // if the VM is halted, the $container is the pool
+      $container = link(obj, 'pool')
 
-    // Old protocol: when there's more than 1 IP on an interface, the IPs
-    // are space or newline delimited in the same `x/ip` field
-    // See https://github.com/vatesfr/xen-orchestra/issues/5801#issuecomment-854337568
-
-    // The `x/ip` field may have a `x/ipv4/0` alias
-    // e.g:
-    // {
-    //   '1/ip': '<IP1> <IP2>',
-    //   '1/ipv4/0': '<IP1> <IP2>',
-    // }
-    // See https://xcp-ng.org/forum/topic/4810
-    const addresses = {}
-    for (const key in networks) {
-      const [, device, index] = /^(\d+)\/ip(?:v[46]\/(\d))?$/.exec(key) ?? []
-      const ips = networks[key].split(/\s+/)
-      if (ips.length === 1 && index !== undefined) {
-        // New protocol or alias
-        addresses[key] = networks[key]
-      } else if (index !== '0' && index !== undefined) {
-        // Should never happen (alias with index >0)
-        continue
-      } else {
-        // Old protocol
-        ips.forEach((ip, i) => {
-          addresses[`${device}/ipv4/${i}`] = ip
-        })
+      // unless one of its VDI is on a non shared SR
+      //
+      // linked objects may not be there when this code run, and it will only be
+      // refreshed when the VM XAPI record change, this value is not guaranteed
+      // to be up-to-date, but it practice it appears to work fine thanks to
+      // `VBDs` and `current_operations` changing when a VDI is
+      // added/removed/migrated
+      for (const vbd of obj.$VBDs) {
+        const sr = vbd?.$VDI?.$SR
+        if (sr !== undefined && !sr.shared) {
+          const pbd = sr.$PBDs[0]
+          const hostId = pbd && link(pbd, 'host')
+          if (hostId !== undefined) {
+            $container = hostId
+            break
+          }
+        }
       }
     }
 
@@ -362,8 +445,9 @@ const TRANSFORMS = {
       // snapshots.
       type: 'VM',
 
-      addresses,
+      addresses: normalizeVmNetworks(guestMetrics?.networks ?? {}),
       affinityHost: link(obj, 'affinity'),
+      attachedPcis: otherConfig.pci?.split(',')?.map(s => s.split('/')[1]),
       auto_poweron: otherConfig.auto_poweron === 'true',
       bios_strings: obj.bios_strings,
       blockedOperations: obj.blocked_operations,
@@ -372,6 +456,7 @@ const TRANSFORMS = {
         max: +obj.VCPUs_max,
         number: isRunning && metrics && xenTools ? +metrics.VCPUs_number : +obj.VCPUs_at_startup,
       },
+      creation,
       current_operations: currentOperations,
       docker: (function () {
         const monitor = otherConfig['xscontainer-monitor']
@@ -395,10 +480,30 @@ const TRANSFORMS = {
           version: version && parseXml(version).docker_version,
         }
       })(),
+      // deprecated, use isNestedVirtEnabled instead
       expNestedHvm: obj.platform['exp-nested-hvm'] === 'true',
+      isNestedVirtEnabled: semver.satisfies(String(obj.$pool.$master.software_version.platform_version), '>=3.4')
+        ? obj.platform['nested-virt'] === 'true'
+        : obj.platform['exp-nested-hvm'] === 'true',
+      vulnerabilities:
+        obj.is_a_template || obj.is_a_snapshot || obj.is_control_domain
+          ? undefined
+          : { xsa468: isVmVulnerable_XSA468(obj) },
+      viridian: obj.platform.viridian === 'true',
       mainIpAddress: extractIpFromVmNetworks(guestMetrics?.networks),
       high_availability: obj.ha_restart_priority,
+      isFirmwareSupported: (() => {
+        const restrictions = parseXml(obj.recommendations)?.restrictions?.restriction
 
+        if (restrictions === undefined) {
+          return true
+        }
+
+        const field = `supports-${obj.HVM_boot_params.firmware}`
+        const firmwareRestriction = restrictions.find(restriction => restriction.field === field)
+
+        return firmwareRestriction === undefined || firmwareRestriction.value !== 'no'
+      })(),
       memory: (function () {
         const dynamicMin = +obj.memory_dynamic_min
         const dynamicMax = +obj.memory_dynamic_max
@@ -428,6 +533,8 @@ const TRANSFORMS = {
       installTime: metrics && toTimestamp(metrics.install_time),
       name_description: obj.name_description,
       name_label: obj.name_label,
+      needsVtpm: obj.platform.vtpm === 'true',
+      notes: otherConfig['xo:notes'],
       other: otherConfig,
       os_version: (guestMetrics && guestMetrics.os_version) || null,
       parent: link(obj, 'parent'),
@@ -441,24 +548,27 @@ const TRANSFORMS = {
       suspendSr: link(obj, 'suspend_SR'),
       tags: obj.tags,
       VIFs: link(obj, 'VIFs'),
+      VTPMs: link(obj, 'VTPMs'),
       virtualizationMode: domainType,
 
       // deprecated, use pvDriversVersion instead
       xenTools,
       ...getVmGuestToolsProps(obj),
 
-      // TODO: handle local VMs (`VM.get_possible_hosts()`).
-      $container: isRunning ? link(obj, 'resident_on') : link(obj, 'pool'),
+      $container,
       $VBDs: link(obj, 'VBDs'),
 
       // TODO: dedupe
       VGPUs: link(obj, 'VGPUs'),
       $VGPUs: link(obj, 'VGPUs'),
       nicType: obj.platform.nic_type,
+      xenStoreData: obj.xenstore_data,
     }
 
     if (isHvm) {
-      ;({ vga: vm.vga = 'cirrus', videoram: vm.videoram = 4 } = obj.platform)
+      const { vga, videoram } = obj.platform
+      vm.vga = vga ?? 'cirrus'
+      vm.videoram = +(videoram ?? 4)
     }
 
     const coresPerSocket = obj.platform['cores-per-socket']
@@ -511,12 +621,15 @@ const TRANSFORMS = {
       }
     }
 
-    let tmp
-    if ((tmp = obj.VCPUs_params)) {
-      tmp.cap && (vm.cpuCap = +tmp.cap)
-      tmp.mask && (vm.cpuMask = tmp.mask.split(',').map(_ => +_))
-      tmp.weight && (vm.cpuWeight = +tmp.weight)
+    const { cap, mask, weight } = obj.VCPUs_params ?? {}
+    if (cap != null) {
+      vm.cpuCap = +cap
     }
+    if (weight != null) {
+      vm.cpuWeight = +weight
+    }
+
+    vm.cpuMask = mask?.split(',').map(_ => +_)
 
     if (!isHvm) {
       vm.PV_args = obj.PV_args
@@ -537,8 +650,10 @@ const TRANSFORMS = {
       // TODO: Should it replace usage?
       physical_usage: +obj.physical_utilisation,
 
-      allocationStrategy: ALLOCATION_BY_TYPE[srType],
+      allocationStrategy:
+        srType === 'linstor' ? (obj.$PBDs[0]?.device_config.provisioning ?? 'unknown') : ALLOCATION_BY_TYPE[srType],
       current_operations: obj.current_operations,
+      inMaintenanceMode: obj.other_config['xo:maintenanceState'] !== undefined,
       name_description: obj.name_description,
       name_label: obj.name_label,
       size: +obj.physical_size,
@@ -564,7 +679,7 @@ const TRANSFORMS = {
       attached: Boolean(obj.currently_attached),
       host: link(obj, 'host'),
       SR: link(obj, 'SR'),
-      device_config: sensitiveValues.replace(obj.device_config, '* obfuscated *'),
+      device_config: Obfuscate.replace(obj.device_config, '* obfuscated *'),
       otherConfig: obj.other_config,
     }
   },
@@ -573,28 +688,39 @@ const TRANSFORMS = {
 
   pif(obj) {
     const metrics = obj.$metrics
+    const isBondMaster = !isEmpty(obj.bond_master_of)
+    const isBondSlave = obj.bond_slave_of !== 'OpaqueRef:NULL'
+
+    // Why is `bond_master_of` a list? Getting the first one in the list seems to be the right way:
+    // https://github.com/xcp-ng/xenadmin/blob/4a9d971dadd04c62f7f77f5ccf1089b4aaa59639/XenModel/XenAPI-Extensions/PIF.cs#L246-L252
+    const bond = isBondMaster ? obj.$bond_master_of[0] : isBondSlave ? obj.$bond_slave_of : undefined
 
     return {
       type: 'PIF',
 
       attached: Boolean(obj.currently_attached),
-      isBondMaster: !isEmpty(obj.bond_master_of),
-      isBondSlave: obj.bond_slave_of !== 'OpaqueRef:NULL',
+      isBondMaster,
+      isBondSlave,
+      bondMaster: isBondSlave ? link(bond, 'master') : undefined,
+      bondSlaves: isBondMaster ? link(bond, 'slaves') : undefined,
       device: obj.device,
       deviceName: metrics && metrics.device_name,
       dns: obj.DNS,
       disallowUnplug: Boolean(obj.disallow_unplug),
       gateway: obj.gateway,
       ip: obj.IP,
+      ipv6: obj.IPv6,
       mac: obj.MAC,
       management: Boolean(obj.management), // TODO: find a better name.
       carrier: Boolean(metrics && metrics.carrier),
       mode: obj.ip_configuration_mode,
+      ipv6Mode: obj.ipv6_configuration_mode,
       mtu: +obj.MTU,
       netmask: obj.netmask,
       // A non physical PIF is a "copy" of an existing physical PIF (same device)
       // A physical PIF cannot be unplugged
       physical: Boolean(obj.physical),
+      primaryAddressType: obj.primary_address_type,
       vlan: +obj.VLAN,
       speed: metrics && +metrics.speed,
       $host: link(obj, 'host'),
@@ -608,16 +734,19 @@ const TRANSFORMS = {
     const vdi = {
       type: 'VDI',
 
+      cbt_enabled: obj.cbt_enabled,
       missing: obj.missing,
       name_description: obj.name_description,
       name_label: obj.name_label,
       parent: obj.sm_config['vhd-parent'],
+      image_format: obj.sm_config['image-format'],
       size: +obj.virtual_size,
       snapshots: link(obj, 'snapshots'),
       tags: obj.tags,
       usage: +obj.physical_utilisation,
       VDI_type: obj.type,
       current_operations: obj.current_operations,
+      other_config: obj.other_config,
 
       $SR: link(obj, 'SR'),
       $VBDs: link(obj, 'VBDs'),
@@ -700,6 +829,8 @@ const TRANSFORMS = {
       tags: obj.tags,
       PIFs: link(obj, 'PIFs'),
       VIFs: link(obj, 'VIFs'),
+      nbd: obj.purpose?.includes('nbd'),
+      insecureNbd: obj.purpose?.includes('insecure_nbd'),
     }
   },
 
@@ -718,6 +849,15 @@ const TRANSFORMS = {
   // -----------------------------------------------------------------
 
   task(obj) {
+    let applies_to
+    if (obj.other_config.applies_to) {
+      const object = obj.$xapi.getObject(obj.other_config.applies_to, undefined)
+      if (object === undefined) {
+        debug(`Unknown other_config.applies_to reference ${obj.other_config.applies_to} in task ${obj.$id}`)
+      } else {
+        applies_to = object.uuid
+      }
+    }
     return {
       allowedOperations: obj.allowed_operations,
       created: toTimestamp(obj.created),
@@ -729,7 +869,7 @@ const TRANSFORMS = {
       result: obj.result,
       status: obj.status,
       xapiRef: obj.$ref,
-
+      applies_to,
       $host: link(obj, 'resident_on'),
     }
   },
@@ -866,6 +1006,69 @@ const TRANSFORMS = {
       vgpus: link(obj, 'VGPUs'),
     }
   },
+
+  // -----------------------------------------------------------------
+
+  vtpm(obj) {
+    return {
+      type: 'VTPM',
+
+      vm: link(obj, 'VM'),
+    }
+  },
+
+  // -----------------------------------------------------------------
+
+  pusb(obj) {
+    let description = obj.vendor_desc
+    if (obj.product_desc.trim() !== '') {
+      description += ` - ${obj.product_desc.trim()}`
+    }
+    return {
+      type: 'PUSB',
+
+      description,
+      host: link(obj, 'host'),
+      passthroughEnabled: obj.passthrough_enabled,
+      speed: obj.speed,
+      usbGroup: link(obj, 'USB_group'),
+      vendorId: obj.vendor_id,
+      version: obj.version,
+    }
+  },
+
+  // -----------------------------------------------------------------
+
+  vusb(obj) {
+    return {
+      type: 'VUSB',
+
+      vm: link(obj, 'VM'),
+      currentlyAttached: obj.currently_attached,
+      usbGroup: link(obj, 'USB_group'),
+    }
+  },
+
+  // -----------------------------------------------------------------
+
+  usb_group(obj) {
+    return {
+      type: 'USB_group',
+
+      PUSBs: link(obj, 'PUSBs'),
+      VUSBs: link(obj, 'VUSBs'),
+    }
+  },
+
+  // -----------------------------------------------------------------
+
+  bond(obj) {
+    return {
+      type: 'bond',
+      master: link(obj, 'master'),
+      mode: obj.mode,
+    }
+  },
 }
 
 // ===================================================================
@@ -899,6 +1102,7 @@ export default function xapiObjectToXo(xapiObj, dependents = {}) {
       value: xapiObj.$id,
     },
     _xapiRef: {
+      enumerable: true,
       value: xapiObj.$ref,
     },
   })

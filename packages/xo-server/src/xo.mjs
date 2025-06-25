@@ -1,23 +1,28 @@
-import Config from '@xen-orchestra/mixins/Config.js'
+import Config from '@xen-orchestra/mixins/Config.mjs'
 import forEach from 'lodash/forEach.js'
-import Hooks from '@xen-orchestra/mixins/Hooks.js'
+import Hooks from '@xen-orchestra/mixins/Hooks.mjs'
+import HttpProxy from '@xen-orchestra/mixins/HttpProxy.mjs'
 import includes from 'lodash/includes.js'
 import isEmpty from 'lodash/isEmpty.js'
 import iteratee from 'lodash/iteratee.js'
 import mixin from '@xen-orchestra/mixin'
 import mixinLegacy from '@xen-orchestra/mixin/legacy.js'
+import once from 'lodash/once.js'
 import stubTrue from 'lodash/stubTrue.js'
+import SslCertificate from '@xen-orchestra/mixins/SslCertificate.mjs'
+import Tasks from '@xen-orchestra/mixins/Tasks.mjs'
 import { Collection as XoCollection } from 'xo-collection'
+import { Index } from 'xo-collection/index.js'
 import { createClient as createRedisClient } from 'redis'
 import { createDebounceResource } from '@vates/disposable/debounceResource.js'
 import { createLogger } from '@xen-orchestra/log'
 import { EventEmitter } from 'events'
 import { noSuchObject } from 'xo-common/api-errors.js'
 import { parseDuration } from '@vates/parse-duration'
+import { pipeline } from 'node:stream'
 import { UniqueIndex as XoUniqueIndex } from 'xo-collection/unique-index.js'
 
 import mixins from './xo-mixins/index.mjs'
-import Connection from './connection.mjs'
 import { generateToken, noop } from './utils.mjs'
 
 // ===================================================================
@@ -29,8 +34,7 @@ export default class Xo extends EventEmitter {
   constructor(opts) {
     super()
 
-    mixin(this, { Config, Hooks }, [opts])
-
+    mixin(this, { Config, Hooks, HttpProxy, SslCertificate, Tasks }, [opts])
     // a lot of mixins adds listener for start/stop/… events
     this.hooks.setMaxListeners(0)
 
@@ -38,22 +42,21 @@ export default class Xo extends EventEmitter {
 
     this._objects = new XoCollection()
     this._objects.createIndex('byRef', new XoUniqueIndex('_xapiRef'))
-
-    // Connections to users.
-    this._nextConId = 0
-    this._connections = { __proto__: null }
+    this._objects.createIndex('type', new Index('type'))
 
     this._httpRequestWatchers = { __proto__: null }
 
     // Connects to Redis.
     {
-      const { renameCommands, socket: path, uri: url } = config.redis || {}
-
-      this._redis = createRedisClient({
-        path,
-        rename_commands: renameCommands,
-        url,
+      const { socket: path, uri: url } = config.redis || {}
+      const redis = createRedisClient({ socket: { path }, url })
+      redis.on('error', error => {
+        log.warn('redis error', { error })
       })
+
+      this._redis = redis
+      this.hooks.on('start core', () => redis.connect())
+      this.hooks.on('stop core', () => redis.quit())
     }
 
     this.hooks.on('start', () => this._watchObjects())
@@ -95,6 +98,14 @@ export default class Xo extends EventEmitter {
     return obj
   }
 
+  hasObject(key, type) {
+    try {
+      return this.getObject(key, type) !== undefined
+    } catch (_) {
+      return false
+    }
+  }
+
   getObjects({ filter, limit } = {}) {
     const { all } = this._objects
 
@@ -123,35 +134,47 @@ export default class Xo extends EventEmitter {
     return results
   }
 
-  // -----------------------------------------------------------------
+  getObjectsByType(type, { filter, limit } = {}) {
+    const objects = this._objects.indexes.type[type]
 
-  createUserConnection() {
-    const { _connections: connections } = this
+    if (filter === undefined) {
+      if (limit === undefined || limit === Infinity) {
+        return objects
+      }
+      filter = stubTrue
+    } else {
+      filter = iteratee(filter)
+      if (limit === undefined) {
+        limit = Infinity
+      }
+    }
 
-    const connection = new Connection()
-    const id = (connection.id = this._nextConId++)
-
-    connections[id] = connection
-    connection.on('close', () => {
-      delete connections[id]
-    })
-
-    return connection
+    const results = { __proto__: null }
+    for (const id in objects) {
+      const object = objects[id]
+      if (filter(object, id, objects)) {
+        if (limit-- <= 0) {
+          break
+        }
+        results[id] = object
+      }
+    }
+    return results
   }
 
   // -----------------------------------------------------------------
 
   _handleHttpRequest(req, res, next) {
-    const { url } = req
+    const { path } = req
 
     const { _httpRequestWatchers: watchers } = this
-    const watcher = watchers[url]
+    const watcher = watchers[path]
     if (!watcher) {
       next()
       return
     }
     if (!watcher.persistent) {
-      delete watchers[url]
+      delete watchers[path]
     }
 
     const { fn, data } = watcher
@@ -163,14 +186,18 @@ export default class Xo extends EventEmitter {
           if (typeof result === 'string' || Buffer.isBuffer(result)) {
             res.end(result)
           } else if (typeof result.pipe === 'function') {
-            result.pipe(res)
+            pipeline(result, res, noop)
           } else {
             res.end(JSON.stringify(result))
           }
         }
       },
       error => {
-        log.error('HTTP request error', { error })
+        log.error('HTTP request error', {
+          data,
+          error,
+          fn: fn.name,
+        })
 
         if (!res.headersSent) {
           res.writeHead(500)
@@ -183,35 +210,35 @@ export default class Xo extends EventEmitter {
 
   async registerHttpRequest(fn, data, { suffix = '' } = {}) {
     const { _httpRequestWatchers: watchers } = this
-    let url
+    let path
 
     do {
-      url = `/api/${await generateToken()}${suffix}`
-    } while (url in watchers)
+      path = `/api/${await generateToken()}${suffix}`
+    } while (path in watchers)
 
-    watchers[url] = {
+    watchers[path] = {
       data,
       fn,
     }
-    return url
+    return path
   }
 
-  async registerHttpRequestHandler(url, fn, { data = undefined, persistent = true } = {}) {
+  async registerHttpRequestHandler(path, fn, { data = undefined, persistent = true } = {}) {
     const { _httpRequestWatchers: watchers } = this
 
-    if (url in watchers) {
-      throw new Error(`a handler is already registered for ${url}`)
+    if (path in watchers) {
+      throw new Error(`a handler is already registered for ${path}`)
     }
 
-    watchers[url] = {
+    watchers[path] = {
       data,
       fn,
       persistent,
     }
-  }
 
-  async unregisterHttpRequestHandler(url) {
-    delete this._httpRequestWatchers[url]
+    return once(() => {
+      delete this._httpRequestWatchers[path]
+    })
   }
 
   // -----------------------------------------------------------------
@@ -266,7 +293,7 @@ export default class Xo extends EventEmitter {
   // Some should be forwarded to connected clients.
   // Some should be persistently saved.
   _watchObjects() {
-    const { _connections: connections, _objects: objects } = this
+    const { _objects: objects } = this
 
     let entered, exited
     function reset() {
@@ -305,7 +332,7 @@ export default class Xo extends EventEmitter {
         return
       }
 
-      forEach(connections, connection => {
+      for (const connection of this.apiConnections) {
         // Notifies only authenticated clients.
         if (connection.has('user_id') && connection.notify) {
           if (enteredMessage) {
@@ -315,7 +342,7 @@ export default class Xo extends EventEmitter {
             connection.notify('all', exitedMessage)
           }
         }
-      })
+      }
 
       reset()
     })

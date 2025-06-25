@@ -1,4 +1,8 @@
 .xo-icon {
+  &-pro-support {
+    @extend .fa;
+    @extend .fa-file-text;
+  }
   &-pool {
     @extend .fa;
     @extend .fa-cloud;
@@ -22,6 +26,10 @@
   &-task {
     @extend .fa;
     @extend .fa-tasks;
+  }
+  &-clean-vm {
+    @extend .fa;
+    @extend .fa-recycle;
   }
   &-template {
     @extend .fa;
@@ -128,6 +136,10 @@
     @extend .fa;
     @extend .fa-caret-up;
   }
+  &-coalesce {
+    @extend .fa;
+    @extend .fa-cog;
+  }
   &-loading {
     @extend .fa;
     @extend .fa-spinner;
@@ -172,6 +184,10 @@
   &-run {
     @extend .fa;
     @extend .fa-play;
+  }
+  &-freeze {
+    @extend .fa;
+    @extend .fa-snowflake-o;
   }
   &-forget {
     @extend .fa;
@@ -338,12 +354,27 @@
     @extend .fa;
     @extend .fa-circle-thin;
   }
-
+  &-api {
+    @extend .fa;
+    @extend .fa-code;
+  }
+  &-favorite {
+    @extend .fa;
+    @extend .fa-star;
+  }
 
   // Backups
   &-backup {
     @extend .fa;
     @extend .fa-download;
+  }
+  &-check {
+    @extend .fa;
+    @extend .fa-check;
+  }
+  &-mirror-backup {
+    @extend .fa;
+    @extend .fa-files-o;
   }
   &-restore {
     @extend .fa;
@@ -374,6 +405,11 @@
     @extend .fa-folder;
   }
 
+  &-health {
+    @extend .fa;
+    @extend .fa-heartbeat;
+  }
+
   // Jobs
   &-jobs {
     @extend .fa;
@@ -382,6 +418,44 @@
   &-migrate-job {
     @extend .fa;
     @extend .fa-share;
+  }
+
+  // IPMI
+  &-cpu-temperature {
+    @extend .fa;
+    @extend .fa-thermometer-full;
+  }
+  &-fan-speed {
+    @extend .fa;
+    @extend .fa-circle-o-notch;
+  }
+  &-fan-status {
+    @extend .fa;
+    @extend .fa-medkit;
+  }
+  &-inlet {
+    @extend .fa;
+    @extend .fa-sign-in;
+  }
+  &-ipmi {
+    @extend .fa;
+    @extend .fa-wrench;
+  }
+  &-outlet {
+    @extend .fa;
+    @extend .fa-sign-out;
+  }
+  &-psu {
+    @extend .fa;
+    @extend .fa-plug;
+  }
+  &-total-power {
+    @extend .fa;
+    @extend .fa-tachometer;
+  }
+  &-bios-version {
+    @extend .fa;
+    @extend .fa-microchip;
   }
 
   // VM
@@ -470,6 +544,15 @@
     &-share {
       @extend .fa;
       @extend .fa-list-alt;
+    }
+    &-warm-migration {
+      @extend .fa;
+      @extend .fa-fire;
+    }
+
+    &-coalesce-leaf {
+      @extend .fa;
+      @extend .fa-compress;
     }
   }
 
@@ -570,6 +653,14 @@
   // SR
   &-sr,
   &-vdi {
+    &-disable {
+      @extend .fa;
+      @extend .fa-times-circle;
+    }
+    &-enable {
+      @extend .fa;
+      @extend .fa-wrench;
+    }
     &-reconnect-all {
       @extend .fa;
       @extend .fa-retweet;
@@ -589,6 +680,10 @@
     &-migrate {
       @extend .fa;
       @extend .fa-share;
+    }
+    &-reclaim-space {
+      @extend .fa;
+      @extend .fa-gavel;
     }
   }
   // Host
@@ -647,6 +742,10 @@
       @extend .fa;
       @extend .fa-angle-double-down;
     }
+    &-rolling-reboot {
+      @extend .fa;
+      @extend .fa-circle-o-notch;
+    }
   }
 
   &-vif {
@@ -655,7 +754,6 @@
       @extend .fa-times;
     }
   }
-
 
   // Host and VM actions
   &-host,
@@ -867,6 +965,10 @@
       @extend .fa;
       @extend .fa-eye;
     }
+    &-sequence {
+      @extend .fa;
+      @extend .fa-list-ol;
+    }
     &-new {
       @extend .fa;
       @extend .fa-plus;
@@ -976,7 +1078,7 @@
       @extend .fa-file-archive-o;
     }
   }
-  &-menu-xosan {
+  &-menu-xostor {
     @extend .fa;
     @extend .fa-database;
   }
@@ -1191,6 +1293,14 @@
   &-open-tunnel {
     @extend .fa;
     @extend .fa-arrows-h;
+  }
+  &-xo-cloud-config {
+    @extend .fa;
+    @extend .fa-cloud-upload;
+  }
+  &-restart {
+    @extend .fa;
+    @extend .fa-refresh;
   }
 
   // XOSAN related

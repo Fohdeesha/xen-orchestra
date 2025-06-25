@@ -13,8 +13,15 @@ import { addTag, editPool, getHostMissingPatches, removeTag } from 'xo'
 import { connectStore, formatSizeShort } from 'utils'
 import { compact, flatten, map, size, uniq } from 'lodash'
 import { createGetObjectsOfType, createGetHostMetrics, createSelector } from 'selectors'
+import { Host, Pool } from 'render-xo-item'
+import { injectState } from 'reaclette'
 
 import styles from './index.css'
+
+import BulkIcons from '../../common/bulk-icons'
+import { isAdmin } from '../../common/selectors'
+import { ShortDate } from '../../common/utils'
+import { getXoaPlan, SOURCES } from '../../common/xoa-plans'
 
 @connectStore(() => {
   const getPoolHosts = createGetObjectsOfType('host').filter(
@@ -48,12 +55,14 @@ import styles from './index.css'
 
   return {
     hostMetrics: getHostMetrics,
+    isAdmin,
     missingPatches: getMissingPatches,
     poolHosts: getPoolHosts,
     nSrs: getNumberOfSrs,
     nVms: getNumberOfVms,
   }
 })
+@injectState
 export default class PoolItem extends Component {
   _addTag = tag => addTag(this.props.item.id, tag)
   _removeTag = tag => removeTag(this.props.item.id, tag)
@@ -66,9 +75,86 @@ export default class PoolItem extends Component {
     this.props.missingPatches.then(patches => this.setState({ missingPatchCount: size(patches) }))
   }
 
+  _getPoolLicenseIconTooltip() {
+    const { state: reacletteState, item: pool } = this.props
+    const { earliestExpirationDate, nHostsUnderLicense, nHosts, supportLevel } =
+      reacletteState.poolLicenseInfoByPoolId[pool.id]
+    let tooltip = _('poolNoSupport')
+
+    if (getXoaPlan() === SOURCES) {
+      tooltip = _('poolSupportSourceUsers')
+    }
+    if (supportLevel === 'total') {
+      tooltip = _('earliestExpirationDate', {
+        dateString:
+          earliestExpirationDate === Infinity ? _('noExpiration') : <ShortDate timestamp={earliestExpirationDate} />,
+      })
+    }
+    if (supportLevel === 'partial') {
+      tooltip = _('poolPartialSupport', { nHostsLicense: nHostsUnderLicense, nHosts })
+    }
+    return tooltip
+  }
+
+  _isXcpngPool() {
+    return Object.values(this.props.poolHosts)[0].productBrand === 'XCP-ng'
+  }
+
+  _getPoolLicenseInfo = () => this.props.state.poolLicenseInfoByPoolId[this.props.item.id]
+
+  _getAreHostsVersionsEqual = () => this.props.state.areHostsVersionsEqualByPool[this.props.item.id]
+
+  _getAlerts = createSelector(
+    () => this.props.isAdmin,
+    this._getPoolLicenseInfo,
+    this._getAreHostsVersionsEqual,
+    () => this.props.poolHosts,
+    () => this.props.item.id,
+    (isAdmin, poolLicenseInfo, areHostsVersionsEqual, hosts, poolId) => {
+      const alerts = []
+
+      if (isAdmin && this._isXcpngPool()) {
+        const { icon, supportLevel } = poolLicenseInfo
+        if (supportLevel !== 'total') {
+          alerts.push({
+            level: 'warning',
+            render: (
+              <p>
+                {icon()} {this._getPoolLicenseIconTooltip()}
+              </p>
+            ),
+          })
+        }
+      }
+
+      if (!areHostsVersionsEqual) {
+        alerts.push({
+          level: 'danger',
+          render: (
+            <div>
+              <p>
+                <Icon icon='alarm' /> {_('notAllHostsHaveTheSameVersion', { pool: <Pool id={poolId} link /> })}
+              </p>
+              <ul>
+                {map(hosts, host => (
+                  <li>{_('keyValue', { key: <Host id={host.id} />, value: host.version })}</li>
+                ))}
+              </ul>
+            </div>
+          ),
+        })
+      }
+
+      return alerts
+    }
+  )
+
   render() {
     const { item: pool, expandAll, selected, hostMetrics, poolHosts, nSrs, nVms } = this.props
     const { missingPatchCount } = this.state
+    const { icon, supportLevel } = this._getPoolLicenseInfo()
+    const master = poolHosts[pool.master]
+
     return (
       <div className={styles.item}>
         <BlockLink to={`/pools/${pool.id}`}>
@@ -80,15 +166,19 @@ export default class PoolItem extends Component {
                 <Ellipsis>
                   <Text value={pool.name_label} onChange={this._setNameLabel} useLongClick />
                 </Ellipsis>
-                &nbsp;&nbsp;
+                &nbsp;
+                <BulkIcons alerts={this._getAlerts()} />
+                &nbsp;
                 {missingPatchCount > 0 && (
                   <span>
-                    &nbsp;&nbsp;
                     <Tooltip content={_('homeMissingPatches')}>
                       <span className='tag tag-pill tag-danger'>{missingPatchCount}</span>
                     </Tooltip>
                   </span>
                 )}
+                &nbsp;
+                {isAdmin && this._isXcpngPool() && supportLevel === 'total' && icon(this._getPoolLicenseIconTooltip())}
+                &nbsp;
                 {pool.HA_enabled && (
                   <span>
                     &nbsp;&nbsp;
@@ -196,15 +286,18 @@ export default class PoolItem extends Component {
                 x <Icon icon='cpu' /> {formatSizeShort(hostMetrics.memoryTotal)} <Icon icon='memory' />
               </span>
             </Col>
-            <Col mediumSize={4} className={styles.itemExpanded}>
+            <Col mediumSize={1} className={styles.itemExpanded}>
+              {master.productBrand} {master.version}
+            </Col>
+            <Col mediumSize={5}>
+              <div style={{ fontSize: '1.4em' }}>
+                <HomeTags type='pool' labels={pool.tags} onDelete={this._removeTag} onAdd={this._addTag} />
+              </div>
+            </Col>
+            <Col mediumSize={3} className={styles.itemExpanded}>
               <span>
                 {_('homePoolMaster')}{' '}
                 <Link to={`/hosts/${pool.master}`}>{poolHosts && poolHosts[pool.master].name_label}</Link>
-              </span>
-            </Col>
-            <Col mediumSize={5}>
-              <span style={{ fontSize: '1.4em' }}>
-                <HomeTags type='pool' labels={pool.tags} onDelete={this._removeTag} onAdd={this._addTag} />
               </span>
             </Col>
           </SingleLineRow>

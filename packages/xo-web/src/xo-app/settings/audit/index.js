@@ -4,6 +4,7 @@ import Button from 'button'
 import Copiable from 'copiable'
 import CopyToClipboard from 'react-copy-to-clipboard'
 import decorate from 'apply-decorators'
+import Dropzone from 'dropzone'
 import Icon from 'icon'
 import Link from 'link'
 import NoObjects from 'no-objects'
@@ -13,10 +14,11 @@ import Tooltip from 'tooltip'
 import Upgrade from 'xoa-upgrade'
 import { alert, chooseAction, form } from 'modal'
 import { alteredAuditRecord, missingAuditRecord } from 'xo-common/api-errors'
-import { FormattedDate, injectIntl } from 'react-intl'
+import { injectIntl } from 'react-intl'
 import { get } from '@xen-orchestra/defined'
 import { injectState, provideState } from 'reaclette'
 import { noop, startCase } from 'lodash'
+import { NumericDate, formatSize } from 'utils'
 import { PREMIUM } from 'xoa-plans'
 import { User } from 'render-xo-item'
 import {
@@ -25,7 +27,9 @@ import {
   fetchAuditRecords,
   generateAuditFingerprint,
   getPlugin,
+  importAuditRecords,
 } from 'xo'
+import RichText from 'rich-text'
 
 const getIntegrityErrorRender = ({ nValid, error }) => (
   <p className='text-danger'>
@@ -166,8 +170,36 @@ const displayRecord = record =>
     <span>
       <Icon icon='audit' /> {_('auditRecord')}
     </span>,
-    <Copiable tagName='pre'>{JSON.stringify(record, null, 2)}</Copiable>
+    <RichText copiable message={JSON.stringify(record, null, 2)} />
   )
+
+const renderImportStatus = ({
+  recordsFile,
+  importError,
+  importResults: { nInvalidRecords, nMissingRecords, lastLogId } = {},
+  importStatus,
+}) => {
+  switch (importStatus) {
+    case 'noFile':
+      return _('noAuditRecordsFile')
+    case 'selectedFile':
+      return <span>{`${recordsFile?.name} (${formatSize(recordsFile?.size)})`}</span>
+    case 'start':
+      return <Icon icon='loading' />
+    case 'end':
+      if (nInvalidRecords === 0 && nMissingRecords === 0) {
+        return <span className='text-success'>{_('importAuditRecordsSuccess')}</span>
+      } else {
+        return (
+          <span className='text-warning'>
+            {_('importAuditRecordsSuccessWithProblems', { nInvalidRecords, nMissingRecords, lastLogId })}
+          </span>
+        )
+      }
+    case 'importError':
+      return <span className='text-danger'>{_('importAuditRecordsError', { importError: importError || '' })}</span>
+  }
+}
 
 const INDIVIDUAL_ACTIONS = [
   {
@@ -207,17 +239,7 @@ const COLUMNS = [
     sortCriteria: ({ data, event }) => (event === 'apiCall' ? data.method : event),
   },
   {
-    itemRenderer: ({ time }) => (
-      <FormattedDate
-        day='numeric'
-        hour='2-digit'
-        minute='2-digit'
-        month='short'
-        second='2-digit'
-        value={new Date(time)}
-        year='numeric'
-      />
-    ),
+    itemRenderer: ({ time }) => <NumericDate timestamp={time} />,
     name: _('date'),
     sortCriteria: 'time',
     sortOrder: 'desc',
@@ -260,7 +282,12 @@ export default decorate([
       _records: undefined,
       checkedRecords: {},
       goTo: undefined,
+      importError: undefined,
+      importStatus: 'noFile',
+      importResults: undefined,
       missingRecord: undefined,
+      recordsFile: undefined,
+      showImportDropzone: false,
     }),
     effects: {
       initialize({ fetchRecords }) {
@@ -268,6 +295,35 @@ export default decorate([
       },
       async fetchRecords() {
         this.state._records = await fetchAuditRecords()
+      },
+      showImportDropzone() {
+        this.state.showImportDropzone = !this.state.showImportDropzone
+      },
+      startImportRecords() {
+        this.state.importStatus = 'start'
+
+        return importAuditRecords(this.state.recordsFile)
+          .then(
+            importResults => {
+              this.state.recordsFile = undefined
+              this.state.importStatus = 'end'
+              this.state.importResults = importResults
+            },
+            error => {
+              this.state.recordsFile = undefined
+              this.state.importStatus = 'importError'
+              this.state.importError = error?.message
+            }
+          )
+          .finally(this.effects.fetchRecords)
+      },
+      handleDrop(_, files) {
+        this.state.recordsFile = files && files[0]
+        this.state.importStatus = 'selectedFile'
+      },
+      unselectFile() {
+        this.state.recordsFile = undefined
+        this.state.importStatus = 'noFile'
       },
       handleRef(_, ref) {
         if (ref !== null) {
@@ -347,8 +403,39 @@ export default decorate([
             size='large'
           >
             {_('auditCheckIntegrity')}
+          </ActionButton>{' '}
+          <ActionButton
+            btnStyle='warning'
+            disabled={state.records?.length > 0}
+            handler={effects.showImportDropzone}
+            icon='upload'
+            size='large'
+            tooltip={_('importAuditRecordsTooltip')}
+          >
+            {_('importAuditRecords')}
           </ActionButton>
         </div>
+
+        {!!state.showImportDropzone && (
+          <div>
+            <Dropzone onDrop={effects.handleDrop} message={_('importRecordsTip')} />
+            {renderImportStatus(state)}
+            <div className='form-group pull-right'>
+              <ActionButton
+                btnStyle='primary'
+                className='mr-1'
+                disabled={!state.recordsFile}
+                handler={effects.startImportRecords}
+                icon='import'
+                type='submit'
+              >
+                {_('importAuditRecordsButton')}
+              </ActionButton>
+              <Button onClick={effects.unselectFile}>{_('importAuditRecordsCleanList')}</Button>
+            </div>
+          </div>
+        )}
+
         {state.isUserActionsRecordInactive && (
           <p>
             <Link

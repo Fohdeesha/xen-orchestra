@@ -1,4 +1,6 @@
-const { dirname, relative } = require('path')
+'use strict'
+
+const { relativeFromFile } = require('@xen-orchestra/fs/path')
 
 const { openVhd } = require('./openVhd')
 const { DISK_TYPES } = require('./_constants')
@@ -6,7 +8,7 @@ const { Disposable } = require('promise-toolbox')
 
 module.exports = async function chain(parentHandler, parentPath, childHandler, childPath, force = false) {
   await Disposable.use(
-    [openVhd(parentHandler, parentPath), openVhd(childHandler, childPath)],
+    [openVhd(parentHandler, parentPath), openVhd(childHandler, childPath, { flags: 'r+' })],
     async ([parentVhd, childVhd]) => {
       await childVhd.readHeaderAndFooter()
       const { header, footer } = childVhd
@@ -19,7 +21,7 @@ module.exports = async function chain(parentHandler, parentPath, childHandler, c
       }
       await childVhd.readBlockAllocationTable()
 
-      const parentName = relative(dirname(childPath), parentPath)
+      const parentName = relativeFromFile(childPath, parentPath)
       header.parentUuid = parentVhd.footer.uuid
       header.parentUnicodeName = parentName
       await childVhd.setUniqueParentLocator(parentName)

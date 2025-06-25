@@ -1,10 +1,9 @@
 {
   "name": "xo-server-auth-github",
-  "version": "0.2.2",
+  "version": "0.3.1",
   "license": "AGPL-3.0-or-later",
   "description": "GitHub authentication plugin for XO-Server",
   "keywords": [
-    "xo-server",
     "xo-server",
     "authentication",
     "github"

@@ -206,8 +206,8 @@ class VifAllowedIps extends BaseComponent {
       lockingMode === 'locked' && noIps
         ? _('vifLockedNetworkNoIps')
         : lockingMode !== 'locked' && !noIps
-        ? _('vifUnlockedNetworkWithIps')
-        : undefined
+          ? _('vifUnlockedNetworkWithIps')
+          : undefined
 
     return (
       <Container>
@@ -722,6 +722,25 @@ const COLUMNS = [
     ),
     name: _('vifRateLimitLabel'),
     sortCriteria: 'rateLimit',
+  },
+  {
+    itemRenderer: (vif, { nbd, networks, insecure_nbd }) => {
+      if (networks[vif.$network]?.nbd) {
+        return (
+          <Tooltip content={_('nbdSecureTooltip')}>
+            <Icon icon='lock' />
+          </Tooltip>
+        )
+      }
+      if (networks[vif.$network]?.insecure_nbd) {
+        ;<Tooltip content={_('nbdInsecureTooltip')}>
+          <Icon icon='unlock' />
+          <Icon icon='error' />
+        </Tooltip>
+      }
+      return null
+    },
+    name: <Tooltip content={_('nbdTootltip')}>{_('nbd')}</Tooltip>,
   },
   {
     itemRenderer: ({ device }, { ipsByDevice }) => {

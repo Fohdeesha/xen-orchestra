@@ -28,7 +28,7 @@ export const REMOVE_CACHE_ENTRY = {}
 //
 // - `delay`: number of milliseconds to cache the response, a function can be
 //   passed to use a custom delay for a call based on its parameters
-export const debounceWithKey = (fn, delay, keyFn = defaultKeyFn) => {
+export const debounceWithKey = (fn, delay, keyFn = defaultKeyFn, debounceFailure = true) => {
   const cache = new MultiKeyMap()
   const delayFn = typeof delay === 'number' ? () => delay : delay
   return function (arg) {
@@ -39,9 +39,17 @@ export const debounceWithKey = (fn, delay, keyFn = defaultKeyFn) => {
     const keys = ensureArray(keyFn.apply(this, arguments))
     let promise = cache.get(keys)
     if (promise === undefined) {
-      cache.set(keys, (promise = fn.apply(this, arguments)))
-      const remove = scheduleRemoveCacheEntry.bind(cache, keys, Date.now() + delayFn.apply(this, arguments))
-      promise.then(remove, remove)
+      cache.set(
+        keys,
+        (promise = new Promise(resolve => {
+          resolve(fn.apply(this, arguments))
+        }))
+      )
+      const delay = delayFn.apply(this, arguments)
+      if (delay !== Infinity) {
+        const remove = scheduleRemoveCacheEntry.bind(cache, keys, Date.now() + delay)
+        promise.then(remove, debounceFailure ? remove : removeCacheEntry.bind(undefined, cache, keys))
+      }
     }
     return promise
   }

@@ -1,6 +1,6 @@
 import PropTypes from 'prop-types'
 import React from 'react'
-import { forOwn } from 'lodash'
+import forOwn from 'lodash/forOwn.js'
 
 import _ from './intl'
 import { fetchHostStats, fetchSrStats, fetchVmStats } from './xo'
@@ -10,6 +10,13 @@ export const DEFAULT_GRANULARITY = {
   granularity: 'seconds',
   label: _('statLastTenMinutes'),
   value: 'lastTenMinutes',
+}
+
+export const INTERVAL_BY_GRANULARITY = {
+  seconds: 5,
+  minutes: 60,
+  hours: 3600,
+  days: 86400,
 }
 
 const OPTIONS = [

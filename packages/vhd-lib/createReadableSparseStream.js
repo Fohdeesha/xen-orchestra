@@ -1,6 +1,8 @@
+'use strict'
+
 const assert = require('assert')
 const asyncIteratorToStream = require('async-iterator-to-stream')
-const { forEachRight } = require('lodash')
+const forEachRight = require('lodash/forEachRight.js')
 
 const computeGeometryForSize = require('./_computeGeometryForSize')
 const { createFooter, createHeader } = require('./_createFooterHeader')

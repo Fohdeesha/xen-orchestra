@@ -17,6 +17,9 @@ import { Col, Container, Row } from 'grid'
 import { confirm, form } from 'modal'
 import { CpuSparkLines, MemorySparkLines, NetworkSparkLines, XvdSparkLines } from 'xo-sparklines'
 
+// add `[]` around the hostname if it's an IPv6 address
+const formatHostname = h => (h.indexOf(':') !== -1 ? `[${h}]` : h)
+
 class SendToClipboard extends Component {
   state = { value: this.props.clipboard }
 
@@ -90,7 +93,7 @@ export default class TabConsole extends Component {
   }
 
   _openSsh = (username = 'root') => {
-    window.location = `ssh://${encodeURIComponent(username)}@${this.props.vm.mainIpAddress}`
+    window.location = `ssh://${encodeURIComponent(username)}@${formatHostname(this.props.vm.mainIpAddress)}`
   }
 
   _openSshMore = async () => {
@@ -111,7 +114,12 @@ export default class TabConsole extends Component {
   }
 
   _openRdp = () => {
-    window.location = `rdp://${this.props.vm.mainIpAddress}`
+    window.location = `rdp://${formatHostname(this.props.vm.mainIpAddress)}`
+  }
+
+  _onChangeScaleValue = event => {
+    const value = event.target.value
+    this.setState({ scale: value / 100 })
   }
 
   render() {
@@ -219,15 +227,30 @@ export default class TabConsole extends Component {
             </div>
           </Col>
           <Col mediumSize={2} className='hidden-lg-down'>
-            <input
-              className='form-control'
-              max={3}
-              min={0.1}
-              onChange={this.linkState('scale')}
-              step={0.1}
-              type='range'
-              value={scale}
-            />
+            <Row>
+              <Col mediumSize={8}>
+                <input
+                  className='form-control'
+                  max={3}
+                  min={0.1}
+                  onChange={this.linkState('scale')}
+                  step={0.1}
+                  type='range'
+                  value={scale}
+                />
+              </Col>
+              <Col mediumSize={4}>
+                <input
+                  className='form-control'
+                  onChange={this._onChangeScaleValue}
+                  step='1'
+                  type='number'
+                  value={Math.round(this.state.scale * 100)}
+                  min={1}
+                  max={300}
+                />
+              </Col>
+            </Row>
           </Col>
           <Col mediumSize={1}>
             <Tooltip content={minimalLayout ? _('showHeaderTooltip') : _('hideHeaderTooltip')}>
@@ -239,12 +262,16 @@ export default class TabConsole extends Component {
         </Row>
         <Row className='console'>
           <Col>
-            <NoVnc
-              onClipboardChange={this._getRemoteClipboard}
-              ref='noVnc'
-              scale={scale}
-              url={resolveUrl(`consoles/${vm.id}`)}
-            />
+            {vm.other.disable_pv_vnc === '1' ? (
+              _('disabledConsole')
+            ) : (
+              <NoVnc
+                onClipboardChange={this._getRemoteClipboard}
+                ref='noVnc'
+                scale={scale}
+                url={resolveUrl(`consoles/${vm.id}`)}
+              />
+            )}
           </Col>
         </Row>
       </Container>

@@ -1,4 +1,5 @@
 import _ from 'intl'
+import Icon from 'icon'
 import Link from 'link'
 import map from 'lodash/map'
 import React from 'react'
@@ -10,7 +11,7 @@ import { connectPbd, disconnectPbd, deletePbd, deletePbds, editSr, isSrShared } 
 import { connectStore, formatSize, noop } from 'utils'
 import { Container, Row, Col } from 'grid'
 import { createGetObjectsOfType, createSelector } from 'selectors'
-import { isEmpty, some } from 'lodash'
+import { filter, isEmpty, some } from 'lodash'
 import { TabButtonLink } from 'tab-button'
 import { Text } from 'editable'
 
@@ -29,9 +30,14 @@ const forgetSrs = pbds =>
 const SR_COLUMNS = [
   {
     name: _('srName'),
-    itemRenderer: storage => (
-      <Link to={`/srs/${storage.id}`}>
-        <Text onChange={nameLabel => editSr(storage.id, { nameLabel })} useLongClick value={storage.nameLabel} />
+    itemRenderer: ({ id, nameLabel, coalesceTask }) => (
+      <Link to={`/srs/${id}`}>
+        <Text onChange={nameLabel => editSr(id, { nameLabel })} useLongClick value={nameLabel} />
+        {coalesceTask !== undefined && (
+          <Tooltip content={`${coalesceTask.name_label} ${Math.round(coalesceTask.progress * 100)}%`}>
+            <Icon icon='coalesce' />
+          </Tooltip>
+        )}
       </Link>
     ),
     sortCriteria: 'nameLabel',
@@ -113,25 +119,28 @@ const SR_ACTIONS = [
 export default connectStore(() => {
   const pbds = createGetObjectsOfType('PBD').pick((_, props) => props.host.$PBDs)
   const srs = createGetObjectsOfType('SR').pick(createSelector(pbds, pbds => map(pbds, pbd => pbd.SR)))
-
-  const storages = createSelector(pbds, srs, (pbds, srs) =>
-    map(pbds, pbd => {
-      const sr = srs[pbd.SR]
-      const { physical_usage: usage, size } = sr
-
-      return {
-        attached: pbd.attached,
-        pbdDeviceConfig: pbd.device_config,
-        format: sr.SR_type,
-        free: size > 0 ? size - usage : 0,
-        id: sr.id,
-        nameLabel: sr.name_label,
-        pbdId: pbd.id,
-        shared: isSrShared(sr),
-        size: size > 0 ? size : 0,
-        usagePercentage: size > 0 && Math.round((100 * usage) / size),
+  const coalesceTasks = createGetObjectsOfType('task').groupBy('applies_to')
+  const storages = createSelector(pbds, srs, coalesceTasks, (pbds, srs, coalesceTasks) =>
+    map(
+      filter(pbds, pbd => srs[pbd.SR] !== undefined),
+      pbd => {
+        const sr = srs[pbd.SR]
+        const { physical_usage: usage, size } = sr
+        return {
+          attached: pbd.attached,
+          pbdDeviceConfig: pbd.device_config,
+          format: sr.SR_type,
+          free: size > 0 ? size - usage : 0,
+          id: sr.id,
+          nameLabel: sr.name_label,
+          pbdId: pbd.id,
+          shared: isSrShared(sr),
+          size: size > 0 ? size : 0,
+          usagePercentage: size > 0 && Math.round((100 * usage) / size),
+          coalesceTask: coalesceTasks[pbd.SR]?.[0], // there can be only one coalesce task by SR
+        }
       }
-    })
+    )
   )
 
   return { storages }

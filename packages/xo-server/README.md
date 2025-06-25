@@ -19,20 +19,20 @@ It contains all the logic of XO and handles:
 
 ## Installation
 
-Manual install procedure is [available here](https://xen-orchestra.com/docs/from_the_sources.html).
+Manual install procedure is [available here](https://docs.xen-orchestra.com/installation#from-the-sources).
 
 ## Compilation
 
 Production build:
 
-```
-$ yarn run build
+```sh
+yarn run build
 ```
 
 Development build:
 
-```
-$ yarn run dev
+```sh
+yarn run dev
 ```
 
 ## How to report a bug?

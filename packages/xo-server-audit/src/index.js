@@ -1,17 +1,22 @@
+import * as CM from 'complex-matcher'
 import asyncIteratorToStream from 'async-iterator-to-stream'
+import ndjson from 'ndjson'
 import { alteredAuditRecord, missingAuditRecord } from 'xo-common/api-errors'
-import { createGzip } from 'zlib'
+import { createGzip, createUnzip } from 'zlib'
 import { createLogger } from '@xen-orchestra/log'
 import { createSchedule } from '@xen-orchestra/cron'
+import { decorateClass } from '@vates/decorate-with'
+import { defer } from 'golike-defer'
 import { fromCallback } from 'promise-toolbox'
-import { pipeline } from 'readable-stream'
 import { AlteredRecordError, AuditCore, MissingRecordError, NULL_ID, Storage } from '@xen-orchestra/audit-core'
+import { PassThrough, pipeline, promises } from 'readable-stream'
 
 const log = createLogger('xo:xo-server-audit')
 
 const DEFAULT_BLOCKED_LIST = {
   'acl.get': true,
   'acl.getCurrentPermissions': true,
+  'api.getConnections': true,
   'audit.checkIntegrity': true,
   'audit.clean': true,
   'audit.deleteRange': true,
@@ -20,42 +25,79 @@ const DEFAULT_BLOCKED_LIST = {
   'backup.list': true,
   'backupNg.getAllJobs': true,
   'backupNg.getAllLogs': true,
+  'backupNg.getJob': true,
+  'backupNg.getLogs': true,
+  'backupNg.getSuggestedExcludedTags': true,
   'backupNg.listVmBackups': true,
   'cloud.getResourceCatalog': true,
   'cloudConfig.getAll': true,
+  'cloudConfig.getAllNetworkConfigs': true,
   'group.getAll': true,
+  'host.getBiosInfo': true,
+  'host.getIpmiSensors': true,
+  'host.getMdadmHealth': true,
+  'host.getSchedulerGranularity': true,
+  'host.getSmartctlHealth': true,
   'host.isHostServerTimeConsistent': true,
   'host.isHyperThreadingEnabled': true,
+  'host.isPubKeyTooShort': true,
   'host.stats': true,
   'ipPool.getAll': true,
+  'job.get': true,
   'job.getAll': true,
   'log.get': true,
   'metadataBackup.getAllJobs': true,
+  'metadataBackup.getJob': true,
+  'mirrorBackup.getAllJobs': true,
+  'mirrorBackup.getJob': true,
+  'netdata.getHostApiKey': true,
+  'netdata.getLocalApiKey': true,
+  'netdata.isNetDataInstalledOnHost': true,
   'network.getBondModes': true,
+  'pci.getDom0AccessStatus': true,
   'pif.getIpv4ConfigurationModes': true,
+  'pif.getIpv6ConfigurationModes': true,
   'plugin.get': true,
+  'pool.getGuestSecureBootReadiness': true,
+  'pool.getLicenseState': true,
+  'pool.getPatchesDifference': true,
   'pool.listMissingPatches': true,
+  'proxy.get': true,
   'proxy.getAll': true,
   'proxy.getApplianceUpdaterState': true,
+  'remote.get': true,
   'remote.getAll': true,
   'remote.getAllInfo': true,
   'remote.list': true,
+  'resourceSet.get': true,
   'resourceSet.getAll': true,
   'role.getAll': true,
+  'schedule.get': true,
   'schedule.getAll': true,
   'server.getAll': true,
   'session.getUser': true,
   'session.signIn': true,
-  'sr.getUnhealthyVdiChainsLength': true,
+  'sr.getAllUnhealthyVdiChainsLength': true,
+  'sr.getVdiChainsInfo': true,
   'sr.stats': true,
   'system.getMethodsInfo': true,
   'system.getServerTimezone': true,
   'system.getServerVersion': true,
+  'system.getVersion': true,
+  'tag.getAllConfigured': true,
+  'test.getPermissionsForUser': true,
   'user.getAll': true,
+  'user.getAuthenticationTokens': true,
+  'vif.getLockingModeValues': true,
+  'vm.getCloudInitConfig': true,
   'vm.getHaValues': true,
+  'vm.getSecurebootReadiness': true,
   'vm.stats': true,
   'xo.getAllObjects': true,
+  'xoa.check': true,
+  'xoa.clearCheckCache': true,
   'xoa.getApplianceInfo': true,
+  'xoa.getHVSupportedVersions': true,
   'xoa.licenses.get': true,
   'xoa.licenses.getAll': true,
   'xoa.licenses.getSelf': true,
@@ -132,13 +174,24 @@ class Db extends Storage {
       db.createKeyStream().on('data', deleteEntry).on('end', cb).on('error', reject)
     })
   }
+
+  async isEmpty() {
+    const readStream = this._db.createReadStream({ limit: 1 })
+    return new Promise(function (resolve, reject) {
+      readStream
+        .on('data', () => resolve(false))
+        .on('end', () => resolve(true))
+        .on('error', reject)
+    })
+  }
 }
 
 export const configurationSchema = {
   type: 'object',
   properties: {
     active: {
-      description: 'Whether to save user actions in the audit log',
+      description:
+        'Whether to save user actions in the audit log (do not enable if you are planning to perform an audit log import)',
       type: 'boolean',
     },
   },
@@ -191,6 +244,10 @@ class AuditXoPlugin {
 
     const exportRecords = this._exportRecords.bind(this)
     exportRecords.permission = 'admin'
+
+    const importRecords = this._importRecords.bind(this)
+    importRecords.description = 'Import audit logs from a file'
+    importRecords.permission = 'admin'
 
     const getRecords = this._getRecords.bind(this)
     getRecords.description = 'Get records from a passed record ID'
@@ -247,8 +304,44 @@ class AuditXoPlugin {
           exportRecords,
           generateFingerprint,
           getRecords,
+          importRecords,
         },
       })
+    )
+
+    cleaners.push(
+      this._xo.registerRestApi(
+        {
+          records: {
+            ':id': {
+              _get: async (req, _, next) => {
+                const record = await this._auditCore.get(req.params.id)
+                if (record !== undefined) {
+                  return record
+                }
+                next()
+              },
+            },
+
+            _get: async function* ({ query }) {
+              const limit = query.limit === undefined ? Infinity : +query.limit
+              const filter = query.filter === undefined ? () => true : CM.parse(query.filter).createPredicate()
+
+              let i = 0
+              for await (const record of this._auditCore.getFrom(query.from)) {
+                if (++i > limit) {
+                  break
+                }
+
+                if (filter(record)) {
+                  yield record
+                }
+              }
+            }.bind(this),
+          },
+        },
+        '/plugins/audit'
+      )
     )
   }
 
@@ -333,11 +426,81 @@ class AuditXoPlugin {
       }))
   }
 
+  async _handleImportRecords($defer, { fileStream, zipped }) {
+    const fnReleaseLock = await this._storage.acquireLock()
+    $defer(fnReleaseLock)
+
+    if (!(await this._storage.isEmpty())) {
+      throw new Error('Audit log database must be empty')
+    }
+
+    const processRecord = async source => {
+      let nInvalidRecords = 0
+      let nMissingRecords = 0
+      // entries are listed backwards, from newest to oldest. nextLog is the last log we imported
+      let lastLogId, lastId, nextLog
+      for await (const record of source) {
+        const { id, isValid } = await this._auditCore._importRecord(record)
+        if (lastId === undefined) {
+          lastId = id
+          await this._storage.setLastId(lastId)
+        }
+        if (!isValid) {
+          nInvalidRecords++
+        }
+        if (nextLog !== undefined && nextLog.previousId !== record.id) {
+          nMissingRecords++
+          lastLogId ??= nextLog.id
+        }
+        nextLog = record
+      }
+      lastLogId ??= nextLog.id // in case no log was missing
+      return { lastLogId, nInvalidRecords, nMissingRecords }
+    }
+
+    try {
+      const res = await promises.pipeline(
+        fileStream,
+        zipped ? createUnzip() : new PassThrough(),
+        ndjson.parse(),
+        processRecord
+      )
+
+      if (this._uploadLastHashJob !== undefined) {
+        await this._uploadLastHash()
+      }
+
+      return res
+    } catch (err) {
+      // Cleaning database because logs were only partially imported
+      await this._storage.clean()
+      throw err
+    }
+  }
+
+  async _importRecords({ zipped }) {
+    if (!(await this._storage.isEmpty())) {
+      throw new Error('Audit log database must be empty')
+    }
+
+    return {
+      $sendTo: await this._xo.registerHttpRequest(async (req, res) => {
+        try {
+          const importResults = await this._handleImportRecords({ fileStream: req, zipped })
+          res.end(JSON.stringify(importResults))
+        } catch (err) {
+          res.writeHead(500)
+          res.end(err.message)
+        }
+      }),
+    }
+  }
+
   // See www-xo#344
   async _uploadLastHash() {
     const xo = this._xo
 
-    // In case of non-existent XOA plugin
+    // In case of nonexistent XOA plugin
     if (xo.audit === undefined) {
       return
     }
@@ -391,9 +554,11 @@ class AuditXoPlugin {
     const { oldest = NULL_ID, newest = await this._storage.getLastId() } = props
     return this._auditCore.checkIntegrity(oldest, newest).catch(error => {
       if (error instanceof MissingRecordError) {
+        log.warn(`Missing record ${error.id} in audit log chain`)
         throw missingAuditRecord(error)
       }
       if (error instanceof AlteredRecordError) {
+        log.warn(`Altered record ${error.id} in audit log chain`)
         throw alteredAuditRecord(error)
       }
       throw error
@@ -440,6 +605,10 @@ AuditXoPlugin.prototype._getRecordsStream = asyncIteratorToStream(async function
     yield JSON.stringify(record)
     yield '\n'
   }
+})
+
+decorateClass(AuditXoPlugin, {
+  _handleImportRecords: defer,
 })
 
 export default opts => new AuditXoPlugin(opts)

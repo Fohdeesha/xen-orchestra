@@ -1,14 +1,19 @@
-import { pickBy } from 'lodash'
+import pickBy from 'lodash/pickBy.js'
 
 const DEFAULTS = {
   __proto__: null,
 
+  backupReportTpl: 'mjml',
+  cbtDestroySnapshotData: false,
   checkpointSnapshot: false,
   compression: '',
   concurrency: 0,
   fullInterval: 0,
+  hideSuccessfulItems: false,
+  nbdConcurrency: 1,
   offlineBackup: false,
   offlineSnapshot: false,
+  preferNbd: false,
   reportWhen: 'failure',
   timeout: 0,
 }

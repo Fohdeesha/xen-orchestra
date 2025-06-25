@@ -1,0 +1,66 @@
+{
+  "name": "@xen-orchestra/web-core",
+  "type": "module",
+  "version": "0.21.0",
+  "private": false,
+  "exports": {
+    "./*": {
+      "types": "./lib/*",
+      "import": "./lib/*"
+    }
+  },
+  "dependencies": {
+    "@floating-ui/vue": "^1.1.6",
+    "@fontsource/poppins": "^5.2.5",
+    "@fortawesome/fontawesome-common-types": "^6.7.2",
+    "@fortawesome/free-regular-svg-icons": "^6.7.2",
+    "@fortawesome/free-solid-svg-icons": "^6.7.2",
+    "@fortawesome/vue-fontawesome": "^3.0.8",
+    "@novnc/novnc": "~1.5.0",
+    "@types/d3-time-format": "^4.0.3",
+    "@vueuse/core": "^13.0.0",
+    "@vueuse/math": "^13.0.0",
+    "@vueuse/shared": "^13.0.0",
+    "d3-time-format": "^4.1.0",
+    "echarts": "^5.6.0",
+    "human-format": "^1.2.1",
+    "iterable-backoff": "^0.1.0",
+    "lodash-es": "^4.17.21",
+    "placement.js": "^1.0.0-beta.5",
+    "simple-icons": "^14.14.0",
+    "vue-echarts": "^6.6.8"
+  },
+  "peerDependencies": {
+    "pinia": "^3.0.1",
+    "vue": "~3.5.13",
+    "vue-i18n": "^11.1.2",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.17.12",
+    "@types/novnc__novnc": "~1.5.0",
+    "@vue/tsconfig": "^0.7.0",
+    "pinia": "^3.0.1",
+    "vue": "~3.5.13",
+    "vue-i18n": "^11.1.2",
+    "vue-router": "^4.5.0"
+  },
+  "homepage": "https://github.com/vatesfr/xen-orchestra/tree/master/@xen-orchestra/web-core",
+  "bugs": "https://github.com/vatesfr/xen-orchestra/issues",
+  "repository": {
+    "directory": "@xen-orchestra/web-core",
+    "type": "git",
+    "url": "https://github.com/vatesfr/xen-orchestra.git"
+  },
+  "author": {
+    "name": "Vates SAS",
+    "url": "https://vates.fr"
+  },
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postversion": "npm publish --access public"
+  }
+}

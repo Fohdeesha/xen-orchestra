@@ -19,47 +19,31 @@ const log = createLogger('xo:jobs')
 
 // -----------------------------------------------------------------------------
 
-const normalize = job => {
-  Object.keys(job).forEach(key => {
-    try {
-      const value = (job[key] = JSON.parse(job[key]))
-
-      // userId are always strings, even if the value is numeric, which might to
-      // them being parsed as numbers.
-      //
-      // The issue has been introduced by
-      // 48b2297bc151df582160be7c1bf1e8ee160320b8.
-      if (key === 'userId' && typeof value === 'number') {
-        job[key] = String(value)
-      }
-    } catch (_) {}
-  })
-  return job
-}
-
-const serialize = job => {
-  Object.keys(job).forEach(key => {
-    const value = job[key]
-    if (typeof value !== 'string') {
-      job[key] = JSON.stringify(job[key])
-    }
-  })
-  return job
-}
-
 class JobsDb extends Collection {
-  async create(job) {
-    return normalize((await this.add(serialize(job))).properties)
+  _serialize(job) {
+    Object.keys(job).forEach(key => {
+      const value = job[key]
+      if (typeof value !== 'string') {
+        job[key] = JSON.stringify(job[key])
+      }
+    })
   }
 
-  async save(job) {
-    await this.update(serialize(job))
-  }
+  _unserialize(job) {
+    Object.keys(job).forEach(key => {
+      try {
+        const value = (job[key] = JSON.parse(job[key]))
 
-  async get(properties) {
-    const jobs = await super.get(properties)
-    jobs.forEach(normalize)
-    return jobs
+        // userId are always strings, even if the value is numeric, which might to
+        // them being parsed as numbers.
+        //
+        // The issue has been introduced by
+        // 48b2297bc151df582160be7c1bf1e8ee160320b8.
+        if (key === 'userId' && typeof value === 'number') {
+          job[key] = String(value)
+        }
+      } catch (_) {}
+    })
   }
 }
 
@@ -73,27 +57,29 @@ export default class Jobs {
   constructor(app) {
     this._app = app
     const executors = (this._executors = { __proto__: null })
-    const jobsDb = (this._jobs = new JobsDb({
-      connection: app._redis,
-      prefix: 'xo:job',
-      indexes: ['user_id', 'key'],
-    }))
     this._logger = undefined
     this._runningJobs = { __proto__: null }
     this._runs = { __proto__: null }
 
     executors.call = executeCall
 
-    app.hooks.on('clean', () => jobsDb.rebuildIndexes())
-    app.hooks.on('start', async () => {
-      this._logger = await app.getLogger('jobs')
+    app.hooks.on('clean', () => this._jobs.rebuildIndexes())
+    app.hooks.on('core started', () => {
+      const jobsDb = (this._jobs = new JobsDb({
+        connection: app._redis,
+        namespace: 'job',
+        indexes: ['user_id', 'key'],
+      }))
 
       app.addConfigManager(
         'jobs',
         () => jobsDb.get(),
-        jobs => Promise.all(jobs.map(job => jobsDb.save(job))),
+        jobs => jobsDb.update(jobs),
         ['users']
       )
+    })
+    app.hooks.on('start', async () => {
+      this._logger = await app.getLogger('jobs')
     })
     // it sends a report for the interrupted backup jobs
     app.on('plugins:registered', () =>
@@ -137,19 +123,18 @@ export default class Jobs {
   }
 
   async getJob(id, type) {
-    let job = await this._jobs.first(id)
-    if (job === undefined || (type !== undefined && job.properties.type !== type)) {
+    const job = await this._jobs.first(id)
+    if (job === undefined || (type !== undefined && job.type !== type)) {
       throw noSuchObject(id, 'job')
     }
 
-    job = job.properties
     job.runId = this._runningJobs[id]
 
     return job
   }
 
   createJob(job) {
-    return this._jobs.create(job)
+    return this._jobs.add(job)
   }
 
   async updateJob(job, merge = true) {
@@ -158,7 +143,7 @@ export default class Jobs {
       job = await this.getJob(id)
       patch(job, props)
     }
-    return /* await */ this._jobs.save(job)
+    await this._jobs.update(job)
   }
 
   registerJobExecutor(type, executor) {
@@ -180,16 +165,18 @@ export default class Jobs {
   }
 
   @decorateWith(defer)
-  async _runJob($defer, job, schedule, data_) {
+  async runJob($defer, job, schedule, data_) {
     const logger = this._logger
     const { id, type } = job
 
     const runJobId = logger.notice(`Starting execution of ${id}.`, {
       data:
-        type === 'backup' || type === 'metadataBackup'
+        type === 'backup' || type === 'metadataBackup' || type === 'mirrorBackup'
           ? {
               mode: job.mode,
               reportWhen: job.settings['']?.reportWhen ?? 'failure',
+              backupReportTpl: job.settings['']?.backupReportTpl,
+              hideSuccessfulItems: job.settings['']?.hideSuccessfulItems,
             }
           : undefined,
       event: 'job.start',
@@ -280,9 +267,9 @@ export default class Jobs {
           })(executor)
       }
 
-      const session = app.createUserConnection()
-      $defer.call(session, 'close')
-      session.set('user_id', job.userId)
+      const connection = app.createApiConnection()
+      $defer.call(connection, 'close')
+      connection.set('user_id', job.userId)
 
       const { cancel, token } = CancelToken.source()
 
@@ -290,15 +277,15 @@ export default class Jobs {
       runs[runJobId] = { cancel }
       $defer(() => delete runs[runJobId])
 
-      const status = await executor({
+      await executor({
         app,
         cancelToken: token,
+        connection,
         data: data_,
         job,
         logger,
         runJobId,
         schedule,
-        session,
       })
 
       await logger.notice(
@@ -310,7 +297,7 @@ export default class Jobs {
         true
       )
 
-      app.emit('job:terminated', runJobId, { status, type })
+      app.emit('job:terminated', runJobId, { type })
     } catch (error) {
       await logger.error(
         `The execution of ${id} has failed.`,
@@ -330,7 +317,7 @@ export default class Jobs {
     const jobs = await Promise.all(idSequence.map(id => this.getJob(id)))
 
     for (const job of jobs) {
-      await this._runJob(job, schedule, data)
+      await this.runJob(job, schedule, data)
     }
   }
 }

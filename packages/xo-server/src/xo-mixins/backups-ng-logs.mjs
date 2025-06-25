@@ -3,6 +3,7 @@ import isEmpty from 'lodash/isEmpty.js'
 import iteratee from 'lodash/iteratee.js'
 import ms from 'ms'
 import sortedIndexBy from 'lodash/sortedIndexBy.js'
+import { noSuchObject } from 'xo-common/api-errors.js'
 
 import { debounceWithKey } from '../_pDebounceWithKey.mjs'
 
@@ -33,10 +34,6 @@ const computeStatusAndSortTasks = (status, tasks) => {
   tasks.sort(taskTimeComparator)
 
   return status
-}
-
-function getPropertyValue(key) {
-  return this[key]
 }
 
 const taskTimeComparator = ({ start: s1, end: e1 }, { start: s2, end: e2 }) => {
@@ -182,7 +179,14 @@ export default {
       forEach(restoreLogs, handleLog)
       forEach(restoreMetadataLogs, handleLog)
 
-      return runId === undefined ? consolidated : consolidated[runId]
+      if (runId !== undefined) {
+        if (consolidated[runId] === undefined) {
+          /* throw */ noSuchObject(runId, 'backup-ng-log')
+        }
+        return consolidated[runId]
+      }
+
+      return consolidated
     },
     10e3,
     function keyFn(runId) {
@@ -194,9 +198,9 @@ export default {
     let logs = await this.getBackupNgLogs()
 
     // convert to array
-    logs = Object.keys(logs).map(getPropertyValue, logs)
+    logs = Object.values(logs)
 
-    if (!isEmpty(filter)) {
+    if (typeof filter === 'function' || !isEmpty(filter)) {
       logs = logs.filter(iteratee(filter))
     }
 
@@ -213,7 +217,7 @@ export default {
             },
             'start'
           )
-    let j =
+    const j =
       before === undefined
         ? logs.length
         : sortedIndexBy(
@@ -224,11 +228,7 @@ export default {
             'start'
           )
 
-    limit += i
-    if (limit < j) {
-      j = limit
-    }
-    logs = logs.slice(i, j)
+    logs = logs.slice(limit === undefined ? i : Math.max(i, j - limit), j)
 
     return logs
   },

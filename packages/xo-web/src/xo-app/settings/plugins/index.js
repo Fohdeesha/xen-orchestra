@@ -5,10 +5,13 @@ import ActionToggle from 'action-toggle'
 import Button from 'button'
 import Component from 'base-component'
 import decorate from 'apply-decorators'
+import escapeRegExp from 'lodash/escapeRegExp'
 import GenericInput from 'json-schema-input'
 import Icon from 'icon'
 import isEmpty from 'lodash/isEmpty'
+import Link from 'link'
 import map from 'lodash/map'
+import merge from 'lodash/merge'
 import orderBy from 'lodash/orderBy'
 import pFinally from 'promise-toolbox/finally'
 import React from 'react'
@@ -39,6 +42,17 @@ class Plugin extends Component {
     this.testFormId = `form-test-${props.id}`
   }
 
+  _getPluginLink = createSelector(
+    () => this.props.name,
+    name => {
+      const s = new ComplexMatcher.Property(
+        'name',
+        new ComplexMatcher.RegExp('^' + escapeRegExp(name) + '$')
+      ).toString()
+      return location => ({ ...location, query: { ...location.query, s } })
+    }
+  )
+
   _getUiSchema = createSelector(() => this.props.configurationSchema, generateUiSchema)
 
   _updateExpanded = () => {
@@ -62,12 +76,15 @@ class Plugin extends Component {
 
   _updateLoad = () => {
     const { props } = this
+    const { id } = props
 
     if (!props.loaded) {
-      return loadPlugin(props.id)
+      enablePluginAutoload(id).catch(console.warn)
+      return loadPlugin(id)
     }
     if (props.unloadable !== false) {
-      return unloadPlugin(props.id)
+      disablePluginAutoload(id).catch(console.warn)
+      return unloadPlugin(id)
     }
   }
 
@@ -92,7 +109,7 @@ class Plugin extends Component {
   _applyPredefinedConfiguration = () => {
     const configName = this.refs.selectPredefinedConfiguration.value
     this.setState({
-      editedConfig: this.props.configurationPresets[configName],
+      editedConfig: merge(undefined, this.state.editedConfig, this.props.configurationPresets[configName]),
     })
   }
 
@@ -125,9 +142,8 @@ class Plugin extends Component {
         <Row>
           <Col mediumSize={8}>
             <h5 className='form-inline clearfix'>
-              <ActionToggle disabled={loaded && props.unloadable === false} handler={this._updateLoad} value={loaded} />
-              <span className='text-primary'>{` ${props.name} `}</span>
-              <span>{`(v${props.version}) `}</span>
+              <ActionToggle disabled={loaded && props.unloadable === false} handler={this._updateLoad} value={loaded} />{' '}
+              <Link to={this._getPluginLink()}>{props.name}</Link> <span>{`(v${props.version}) `}</span>
               {description !== undefined && description !== '' && (
                 <span className='text-muted small'> - {description}</span>
               )}
@@ -155,7 +171,7 @@ class Plugin extends Component {
                   <p>{_('pluginConfigurationChoosePreset')}</p>
                 </span>
                 <div className='input-group'>
-                  <select className='form-control' disabled={!editedConfig} ref='selectPredefinedConfiguration'>
+                  <select className='form-control' ref='selectPredefinedConfiguration'>
                     {map(configurationPresets, (_, name) => (
                       <option key={name} value={name}>
                         {name}
@@ -163,7 +179,7 @@ class Plugin extends Component {
                     ))}
                   </select>
                   <span className='input-group-btn'>
-                    <Button btnStyle='primary' disabled={!editedConfig} onClick={this._applyPredefinedConfiguration}>
+                    <Button btnStyle='primary' onClick={this._applyPredefinedConfiguration}>
                       {_('applyPluginPreset')}
                     </Button>
                   </span>

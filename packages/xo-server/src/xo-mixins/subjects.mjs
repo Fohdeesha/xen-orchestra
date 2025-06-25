@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import filter from 'lodash/filter.js'
 import { createLogger } from '@xen-orchestra/log'
 import { ignoreErrors } from 'promise-toolbox'
@@ -22,24 +23,24 @@ export default class {
   constructor(app) {
     this._app = app
 
-    const redis = app._redis
+    app.hooks.on('clean', () => Promise.all([this._groups.rebuildIndexes(), this._users.rebuildIndexes()]))
+    app.hooks.on('core started', () => {
+      const redis = app._redis
+      const groupsDb = (this._groups = new Groups({
+        connection: redis,
+        namespace: 'group',
+        indexes: ['name'],
+      }))
+      const usersDb = (this._users = new Users({
+        connection: redis,
+        namespace: 'user',
+        indexes: ['email'],
+      }))
 
-    const groupsDb = (this._groups = new Groups({
-      connection: redis,
-      prefix: 'xo:group',
-    }))
-    const usersDb = (this._users = new Users({
-      connection: redis,
-      prefix: 'xo:user',
-      indexes: ['email'],
-    }))
-
-    app.hooks.on('clean', () => Promise.all([groupsDb.rebuildIndexes(), usersDb.rebuildIndexes()]))
-    app.hooks.on('start', async () => {
       app.addConfigManager(
         'groups',
         () => groupsDb.get(),
-        groups => Promise.all(groups.map(group => groupsDb.save(group))),
+        groups => groupsDb.update(groups),
         ['users']
       )
       app.addConfigManager(
@@ -53,12 +54,13 @@ export default class {
               if (!isEmpty(conflictUsers)) {
                 await Promise.all(conflictUsers.map(({ id }) => id !== userId && this.deleteUser(id)))
               }
-              return usersDb.save(user)
+              return usersDb.update(user)
             })
           )
       )
-
-      if (!(await usersDb.exists())) {
+    })
+    app.hooks.on('start', async () => {
+      if (!(await this._users.exists())) {
         const key = 'vm-data/admin-account'
         const { email = 'admin@admin.net', password = 'admin' } = await XenStore.read(key)
           .then(JSON.parse)
@@ -82,10 +84,7 @@ export default class {
       properties.pw_hash = await hash(password)
     }
 
-    // TODO: use plain objects
-    const user = await this._users.create(properties)
-
-    return user.properties
+    return this._users.add(properties)
   }
 
   async deleteUser(id) {
@@ -116,6 +115,16 @@ export default class {
         .then(group => this._removeUserFromGroup(id, group))
         ::ignoreErrors()
     })
+
+    for (const connection of this._app.apiConnections) {
+      if (connection.get('user_id', undefined) === id) {
+        connection.close()
+      }
+    }
+  }
+
+  doesUserExist(id) {
+    return this._users.exists(id)
   }
 
   async updateUser(
@@ -139,8 +148,8 @@ export default class {
     if (permission) {
       user.permission = permission
     }
-    if (password) {
-      user.pw_hash = await hash(password)
+    if (password !== undefined) {
+      user.pw_hash = password === null ? undefined : await hash(password)
     }
 
     const newPreferences = { ...user.preferences }
@@ -153,21 +162,39 @@ export default class {
     })
     user.preferences = isEmpty(newPreferences) ? undefined : newPreferences
 
-    const newAuthProviders = { ...user.authProviders }
-    forEach(authProviders, (value, name) => {
-      if (value == null) {
-        delete newAuthProviders[name]
-      } else {
-        newAuthProviders[name] = value
+    if (authProviders !== undefined) {
+      let newAuthProviders
+      if (authProviders !== null) {
+        newAuthProviders = { ...user.authProviders }
+        forEach(authProviders, (value, name) => {
+          if (value == null) {
+            delete newAuthProviders[name]
+          } else {
+            newAuthProviders[name] = value
+          }
+        })
       }
-    })
-    user.authProviders = isEmpty(newAuthProviders) ? undefined : newAuthProviders
+      user.authProviders = isEmpty(newAuthProviders) ? undefined : newAuthProviders
+    }
+
+    // if updating either authProviders or password, check consistency
+    if (
+      (authProviders !== undefined || password !== undefined) &&
+      user.pw_hash !== undefined &&
+      !isEmpty(user.authProviders)
+    ) {
+      throw new Error('user cannot have both password and auth providers')
+    }
+
+    if (user.pw_hash === undefined && isEmpty(user.authProviders) && id === this._app.apiContext?.user.id) {
+      throw new Error('current user cannot be without password and auth providers')
+    }
 
     // TODO: remove
     user.email = user.name
     delete user.name
 
-    await this._users.save(user)
+    await this._users.update(user)
   }
 
   // Merge this method in getUser() when plain objects.
@@ -183,7 +210,7 @@ export default class {
   // TODO: this method will no longer be async when users are
   // integrated to the main collection.
   async getUser(id) {
-    const user = (await this._getUser(id)).properties
+    const user = await this._getUser(id)
 
     // TODO: remove when no longer the email property has been
     // completely eradicated.
@@ -200,7 +227,7 @@ export default class {
     // TODO: change `email` by `username`.
     const user = await this._users.first({ email: username })
     if (user !== undefined) {
-      return user.properties
+      return user
     }
 
     if (returnNullIfMissing) {
@@ -210,26 +237,8 @@ export default class {
     throw noSuchObject(username, 'user')
   }
 
-  // Deprecated: use registerUser2 instead
-  // Get or create a user associated with an auth provider.
-  async registerUser(provider, name) {
-    const user = await this.getUserByName(name, true)
-    if (user) {
-      if (user._provider !== provider) {
-        throw new Error(`the name ${name} is already taken`)
-      }
-
-      return user
-    }
-
-    if (!this._app.config.get('createUserOnFirstSignin')) {
-      throw new Error(`registering ${name} user is forbidden`)
-    }
-
-    return /* await */ this.createUser({
-      name,
-      _provider: provider,
-    })
+  async registerUser() {
+    throw new Error('use registerUser2 instead')
   }
 
   // New implementation of registerUser that:
@@ -239,6 +248,11 @@ export default class {
   // - name: the name of the user according to the provider
   // - data: additional data about the user that the provider may want to store
   async registerUser2(providerId, { user: { id, name }, data }) {
+    assert.equal(typeof id, 'string')
+    assert.notEqual(id, '')
+    assert.equal(typeof name, 'string')
+    assert.notEqual(name, '')
+
     const users = await this.getAllUsers()
 
     // Get the XO user bound to the provider's user
@@ -292,6 +306,7 @@ export default class {
             data: data !== undefined ? data : user.authProviders?.[providerId]?.data,
           },
         },
+        password: null,
       })
     }
 
@@ -307,8 +322,8 @@ export default class {
   }
 
   async checkUserPassword(userId, password, updateIfNecessary = true) {
-    const { pw_hash: hash } = await this.getUser(userId)
-    if (!(hash && (await verify(password, hash)))) {
+    const { authProviders, pw_hash: hash } = await this.getUser(userId)
+    if (!(hash !== undefined && isEmpty(authProviders) && (await verify(password, hash)))) {
       return false
     }
 
@@ -321,11 +336,8 @@ export default class {
 
   // -----------------------------------------------------------------
 
-  async createGroup({ name, provider, providerGroupId }) {
-    // TODO: use plain objects.
-    const group = (await this._groups.create(name, provider, providerGroupId)).properties
-
-    return group
+  createGroup({ name, provider, providerGroupId }) {
+    return this._groups.add({ name, provider, providerGroupId })
   }
 
   async deleteGroup(id) {
@@ -353,7 +365,7 @@ export default class {
 
     if (name) group.name = name
 
-    await this._groups.save(group)
+    await this._groups.update(group)
   }
 
   async getGroup(id) {
@@ -362,7 +374,7 @@ export default class {
       throw noSuchObject(id, 'group')
     }
 
-    return group.properties
+    return group
   }
 
   async getAllGroups() {
@@ -375,17 +387,17 @@ export default class {
     user.groups = addToArraySet(user.groups, groupId)
     group.users = addToArraySet(group.users, userId)
 
-    await Promise.all([this._users.save(user), this._groups.save(group)])
+    await Promise.all([this._users.update(user), this._groups.update(group)])
   }
 
   async _removeUserFromGroup(userId, group) {
     group.users = removeFromArraySet(group.users, userId)
-    return this._groups.save(group)
+    return this._groups.update(group)
   }
 
   async _removeGroupFromUser(groupId, user) {
     user.groups = removeFromArraySet(user.groups, groupId)
-    return this._users.save(user)
+    return this._users.update(user)
   }
 
   async removeUserFromGroup(userId, groupId) {
@@ -423,11 +435,11 @@ export default class {
 
     group.users = userIds
 
-    const saveUser = ::this._users.save
+    const updateUser = ::this._users.update
     await Promise.all([
-      Promise.all(newUsers.map(saveUser)),
-      Promise.all(oldUsers.map(saveUser)),
-      this._groups.save(group),
+      Promise.all(newUsers.map(updateUser)),
+      Promise.all(oldUsers.map(updateUser)),
+      this._groups.update(group),
     ])
   }
 }

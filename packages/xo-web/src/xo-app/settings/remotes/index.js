@@ -29,11 +29,13 @@ import {
 
 import Remote from './remote'
 
+const formatError = error => (typeof error === 'string' ? error : JSON.stringify(error, null, 2).replace(/\\n/g, '\n'))
+
 const _changeUrlElement = (value, { remote, element }) =>
   editRemote(remote, {
-    url: format({ ...remote, [element]: value === null ? undefined : value }),
+    url: format({ ...parse(remote.url), [element]: value === null ? undefined : value }),
   })
-const _showError = remote => alert(_('remoteConnectionFailed'), remote.error)
+const _showError = remote => alert(_('remoteConnectionFailed'), <pre>{formatError(remote.error)}</pre>)
 const _editRemoteName = (name, { remote }) => editRemote(remote, { name })
 const _editRemoteOptions = (options, { remote }) => editRemote(remote, { options: options !== '' ? options : null })
 
@@ -122,6 +124,36 @@ const COLUMN_PROXY = {
   name: _('proxy'),
 }
 
+const COLUMN_ENCRYPTION = {
+  itemRenderer: remote => {
+    // remote.info?.encryption undefined means that remote is not enabled and synced
+    // we don't have the algorithm used at this step
+    if (remote.info?.encryption === undefined) {
+      return remote.encryptionKey !== undefined ? <Icon size='lg' icon='lock' /> : null
+    } else {
+      // remote enabled and not encrypted
+      if (remote.info.encryption.algorithm === 'none') {
+        return null
+      }
+      const { algorithm, isLegacy, recommendedAlgorithm } = remote.info.encryption
+      return (
+        <span>
+          <Tooltip content={algorithm}>
+            <Icon className='mr-1' icon='lock' size='lg' />
+          </Tooltip>
+
+          {isLegacy && (
+            <Tooltip content={_('remoteEncryptionLegacy', { algorithm, recommendedAlgorithm })}>
+              <Icon icon='error' size='lg' />
+            </Tooltip>
+          )}
+        </span>
+      )
+    }
+  },
+  name: _('encryption'),
+}
+
 const fixRemoteUrl = remote => editRemote(remote, { url: format(remote) })
 const COLUMNS_LOCAL_REMOTE = [
   COLUMN_NAME,
@@ -139,6 +171,7 @@ const COLUMNS_LOCAL_REMOTE = [
   },
   COLUMN_STATE,
   COLUMN_DISK,
+  COLUMN_ENCRYPTION,
   COLUMN_SPEED,
   COLUMN_PROXY,
 ]
@@ -196,6 +229,7 @@ const COLUMNS_NFS_REMOTE = [
   },
   COLUMN_STATE,
   COLUMN_DISK,
+  COLUMN_ENCRYPTION,
   COLUMN_SPEED,
   COLUMN_PROXY,
 ]
@@ -243,6 +277,7 @@ const COLUMNS_SMB_REMOTE = [
     ),
     name: _('remoteAuth'),
   },
+  COLUMN_ENCRYPTION,
   COLUMN_SPEED,
   COLUMN_PROXY,
 ]
@@ -298,6 +333,59 @@ const COLUMNS_S3_REMOTE = [
     ),
     name: 'Key',
   },
+  COLUMN_ENCRYPTION,
+  COLUMN_SPEED,
+  COLUMN_PROXY,
+]
+
+const COLUMNS_AZURE_REMOTE = [
+  COLUMN_NAME,
+  {
+    itemRenderer: remote => remote.protocol === 'https' && <Icon icon='success' />,
+    name: <span>{_('remoteAzureLabelUseHttps')} </span>,
+  },
+  {
+    itemRenderer: (remote, { formatMessage }) => (
+      <Text
+        data-element='host'
+        data-remote={remote}
+        onChange={_changeUrlElement}
+        placeholder='Azure host'
+        value={remote.host}
+      />
+    ),
+    name: 'Azure Endpoint',
+  },
+  {
+    itemRenderer: (remote, { formatMessage }) => (
+      <Text
+        data-element='path'
+        data-remote={remote}
+        onChange={_changeUrlElement}
+        placeholder='Azure placeholder'
+        value={remote.path}
+      />
+    ),
+    name: 'Path',
+  },
+  COLUMN_STATE,
+  {
+    itemRenderer: (remote, { formatMessage }) => (
+      <span>
+        <Text data-element='username' data-remote={remote} onChange={_changeUrlElement} value={remote.username} />
+        :
+        <Password
+          data-element='password'
+          data-remote={remote}
+          onChange={_changeUrlElement}
+          placeholder='Click to change Secret Key'
+          value=''
+        />
+      </span>
+    ),
+    name: 'Account',
+  },
+  COLUMN_ENCRYPTION,
   COLUMN_SPEED,
   COLUMN_PROXY,
 ]
@@ -331,7 +419,9 @@ const INDIVIDUAL_ACTIONS = [
                 <p>
                   <dl className='dl-horizontal'>
                     <dt>{_('remoteTestError')}</dt>
-                    <dd>{answer.error}</dd>
+                    <dd>
+                      <pre>{formatError(answer.error)}</pre>
+                    </dd>
                     <dt>{_('remoteTestStep')}</dt>
                     <dd>{answer.step}</dd>
                   </dl>
@@ -463,6 +553,39 @@ export default decorate([
             groupedActions={GROUPED_ACTIONS}
             individualActions={INDIVIDUAL_ACTIONS}
             stateUrlParam='s3'
+          />
+        </div>
+      )}
+      {!isEmpty(state.remoteWithInfo.azure) && (
+        <div>
+          <h2>{_('remoteTypeAzure')}</h2>
+          <p>{state.remoteWithInfo.azurite}</p>
+          <SortedTable
+            collection={state.remoteWithInfo.azurite}
+            columns={COLUMNS_AZURE_REMOTE}
+            data-editRemote={effects.editRemote}
+            data-formatMessage={formatMessage}
+            data-reset={effects.reset}
+            filters={FILTERS}
+            groupedActions={GROUPED_ACTIONS}
+            individualActions={INDIVIDUAL_ACTIONS}
+            stateUrlParam='azure'
+          />
+        </div>
+      )}
+      {!isEmpty(state.remoteWithInfo.azurite) && (
+        <div>
+          <h2>{_('remoteTypeAzurite')}</h2>
+          <SortedTable
+            collection={state.remoteWithInfo.azurite}
+            columns={COLUMNS_AZURE_REMOTE}
+            data-editRemote={effects.editRemote}
+            data-formatMessage={formatMessage}
+            data-reset={effects.reset}
+            filters={FILTERS}
+            groupedActions={GROUPED_ACTIONS}
+            individualActions={INDIVIDUAL_ACTIONS}
+            stateUrlParam='azurite'
           />
         </div>
       )}

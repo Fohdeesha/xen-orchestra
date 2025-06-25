@@ -179,9 +179,6 @@ export default {
   // Original text: "IPs"
   settingsIpsPage: "IP'ler",
 
-  // Original text: "Config"
-  settingsConfigPage: 'Yapılandırma',
-
   // Original text: "About"
   aboutPage: 'Hakkında',
 
@@ -296,10 +293,10 @@ export default {
   // Original text: "Welcome to Xen Orchestra!"
   homeWelcome: "Xen Orchestra'ya Hoşgeldiniz!",
 
-  // Original text: "Add your XenServer hosts or pools"
+  // Original text: "Add your XCP-ng hosts or pools"
   homeWelcomeText: 'XenServer sunucu veya havuzunu ekle',
 
-  // Original text: "Some XenServers have been registered but are not connected"
+  // Original text: "Some XCP-ng hosts have been registered but are not connected"
   homeConnectServerText: "Bazı XenServer'lar kayıtlı ama bağlı değil",
 
   // Original text: "Want some help?"
@@ -1993,9 +1990,6 @@ export default {
   // Original text: "Invalid parameters"
   configIpErrorTitle: 'Geçersiz parametre',
 
-  // Original text: "IP address and netmask required"
-  configIpErrorMessage: 'IP adresi ve ağ maskesi gerekli',
-
   // Original text: "Static IP address"
   staticIp: 'Statik IP adresi',
 
@@ -3223,7 +3217,7 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: 'SR:',
 
-  // Original text: "VMs to import"
+  // Original text: "VM{nVms, plural, one {} other {s}} to import"
   vmsToImport: "içe aktarılacak VM'ler",
 
   // Original text: "Reset"
@@ -3244,8 +3238,8 @@ export default {
   // Original text: "Export starting…"
   startVmExport: 'Dışa aktarma başlatılıyor...',
 
-  // Original text: "N CPUs"
-  nCpus: 'N CPU',
+  // Original text: 'Number of CPUs'
+  nCpus: undefined,
 
   // Original text: "Memory"
   vmMemory: 'Bellek',
@@ -3342,9 +3336,6 @@ export default {
 
   // Original text: "Click on a VM to display restore options"
   restoreBackupsInfo: "Geri getirme seçenekleri için bir VM'e tıklayın",
-
-  // Original text: "Only the files of Delta Backup which are not on a SMB remote can be restored"
-  restoreDeltaBackupsInfo: 'Yalnızca SMB hedefinde olmayan fark yedeklerinden dosya alınabilir',
 
   // Original text: "Enabled"
   remoteEnabled: 'Etkin',
@@ -4017,12 +4008,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'Xen Orchestra',
 
-  // Original text: "Xen Orchestra server"
-  xenOrchestraServer: 'Xen Orchestra sunucusu',
-
-  // Original text: "Xen Orchestra web client"
-  xenOrchestraWeb: 'Xen Orchestra web istemcisi',
-
   // Original text: "No pro support provided!"
   noProSupport: 'Hiçbir profesyonel destek verilmez!',
 
@@ -4144,9 +4129,9 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: 'Topluluk sürümü için güncelleştirici sunulmuyor',
 
-  // Original text: "Please consider subscribing and trying it with all the features for free during 15 days on {link}."
+  // Original text: "Please consider subscribing and trying it with all the features for free during 30 days on {link}."
   considerSubscribe:
-    'Lütfen {link} adresinden abone olun ve 15 gün boyunca ücretsiz olarak tüm özellikleri kullanmayı deneyin.',
+    'Lütfen {link} adresinden abone olun ve 30 gün boyunca ücretsiz olarak tüm özellikleri kullanmayı deneyin.',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning:
@@ -4650,7 +4635,7 @@ export default {
   xosanUsedSpace: 'Kullanılan alan',
 
   // Original text: "License"
-  xosanLicense: 'Lisans',
+  license: 'Lisans',
 
   // Original text: "This XOSAN has more than 1 license!"
   xosanMultipleLicenses: "Bu XOSAN 1'den fazla lisansa sahip!",
@@ -4977,16 +4962,16 @@ export default {
   xosanCheckLicenseError: "Bu XOSAN SR'deki lisans kontrol edilemedi",
 
   // Original text: "Could not fetch licenses"
-  xosanGetLicensesError: 'Lisans alınamadı',
+  getLicensesError: 'Lisans alınamadı',
 
   // Original text: "License has expired."
   xosanLicenseHasExpired: "Lisnas'ın süresi doldu",
 
   // Original text: "License expires on {date}."
-  xosanLicenseExpiresDate: 'Lisans {date} tarihinde bitecek.',
+  licenseExpiresDate: 'Lisans {date} tarihinde bitecek.',
 
   // Original text: "Update the license now!"
-  xosanUpdateLicenseMessage: "Lisans'ı şimdi güncelle!",
+  updateLicenseMessage: "Lisans'ı şimdi güncelle!",
 
   // Original text: "Unknown XOSAN SR."
   xosanUnknownSr: 'Bilinmeyen XOSAN SR',
@@ -4998,7 +4983,7 @@ export default {
   xosanNoLicense: 'Lisans yok.',
 
   // Original text: "Unlock now!"
-  xosanUnlockNow: 'Şimdi kilidi kaldır!',
+  unlockNow: 'Şimdi kilidi kaldır!',
 
   // Original text: "Select a license"
   selectLicense: 'Bir lisans seç',

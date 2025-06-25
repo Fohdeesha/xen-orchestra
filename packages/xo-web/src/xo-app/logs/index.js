@@ -13,10 +13,9 @@ import SortedTable from 'sorted-table'
 import Tooltip from 'tooltip'
 import { alert } from 'modal'
 import { Card, CardHeader, CardBlock } from 'card'
-import { connectStore, formatSize, formatSpeed } from 'utils'
+import { connectStore, formatSize, formatSpeed, NumericDate } from 'utils'
 import { createGetObject, createSelector } from 'selectors'
 import { filter, forEach, includes, keyBy, map, orderBy } from 'lodash'
-import { FormattedDate } from 'react-intl'
 import { get } from '@xen-orchestra/defined'
 import { deleteJobsLogs, subscribeJobs, subscribeJobsLogs, subscribeBackupNgJobs } from 'xo'
 
@@ -62,10 +61,10 @@ const JobCallStateInfos = ({ end, error, isJobInterrupted }) => {
         ? ['skipped', 'jobCallSkipped']
         : ['halted', 'failedJobCall']
       : end !== undefined
-      ? ['running', 'successfulJobCall']
-      : isJobInterrupted
-      ? ['halted', 'jobInterrupted']
-      : ['busy', 'jobCallInProgess']
+        ? ['running', 'successfulJobCall']
+        : isJobInterrupted
+          ? ['halted', 'jobInterrupted']
+          : ['busy', 'jobCallInProgess']
 
   return (
     <Tooltip content={_(tooltip)}>
@@ -123,7 +122,7 @@ const PREDICATES = {
 const NO_OBJECTS_MATCH_THIS_PATTERN = 'no objects match this pattern'
 const UNHEALTHY_VDI_CHAIN_ERROR = 'unhealthy VDI chain'
 const NO_SUCH_OBJECT_ERROR = 'no such object'
-const UNHEALTHY_VDI_CHAIN_LINK = 'https://xen-orchestra.com/docs/backup_troubleshooting.html#vdi-chain-protection'
+const UNHEALTHY_VDI_CHAIN_LINK = 'https://docs.xen-orchestra.com/backup_troubleshooting#vdi-chain-protection'
 
 const isSkippedError = error => error.message === UNHEALTHY_VDI_CHAIN_ERROR || error.message === NO_SUCH_OBJECT_ERROR
 
@@ -200,33 +199,11 @@ class Log extends BaseComponent {
                 <JobCallStateInfos end={end} error={error} isJobInterrupted={this._getIsJobInterrupted()} />
                 <br />
                 {map(call.params, (value, key) => [<JobParam id={value} paramKey={key} key={key} />, <br />])}
-                {_.keyValue(
-                  _('jobStart'),
-                  <FormattedDate
-                    value={new Date(start)}
-                    month='short'
-                    day='numeric'
-                    year='numeric'
-                    hour='2-digit'
-                    minute='2-digit'
-                    second='2-digit'
-                  />
-                )}
+                {_.keyValue(_('jobStart'), <NumericDate timestamp={start} />)}
                 <br />
                 {end !== undefined && (
                   <div>
-                    {_.keyValue(
-                      _('jobEnd'),
-                      <FormattedDate
-                        value={new Date(end)}
-                        month='short'
-                        day='numeric'
-                        year='numeric'
-                        hour='2-digit'
-                        minute='2-digit'
-                        second='2-digit'
-                      />
-                    )}
+                    {_.keyValue(_('jobEnd'), <NumericDate timestamp={end} />)}
                     <br />
                     {_.keyValue(_('jobDuration'), <FormattedDuration duration={jobDuration} />)}
                   </div>
@@ -304,36 +281,14 @@ const LOG_COLUMNS = [
   },
   {
     name: _('jobStart'),
-    itemRenderer: log =>
-      log.start && (
-        <FormattedDate
-          value={new Date(log.start)}
-          month='short'
-          day='numeric'
-          year='numeric'
-          hour='2-digit'
-          minute='2-digit'
-          second='2-digit'
-        />
-      ),
+    itemRenderer: log => log.start && <NumericDate timestamp={log.start} />,
     sortCriteria: log => log.start,
     sortOrder: 'desc',
   },
   {
     default: true,
     name: _('jobEnd'),
-    itemRenderer: log =>
-      log.end && (
-        <FormattedDate
-          value={new Date(log.end)}
-          month='short'
-          day='numeric'
-          year='numeric'
-          hour='2-digit'
-          minute='2-digit'
-          second='2-digit'
-        />
-      ),
+    itemRenderer: log => log.end && <NumericDate timestamp={log.end} />,
     sortCriteria: log => log.end || log.start,
     sortOrder: 'desc',
   },

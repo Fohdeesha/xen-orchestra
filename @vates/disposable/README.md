@@ -10,8 +10,8 @@
 
 Installation of the [npm package](https://npmjs.org/package/@vates/disposable):
 
-```
-> npm install --save @vates/disposable
+```sh
+npm install --save @vates/disposable
 ```
 
 ## Usage
@@ -32,7 +32,7 @@ import { deduped } from '@vates/disposable/deduped'
 // the connection with the passed host will be established once at the first call, then, it will be shared with the next calls
 const getConnection = deduped(async function (host)) {
   const connection = new Connection(host)
-  return new Disposabe(connection, () => connection.close())
+  return new Disposable(connection, () => connection.close())
 }, host => [host])
 ```
 

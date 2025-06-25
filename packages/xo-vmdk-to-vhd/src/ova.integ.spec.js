@@ -2,13 +2,13 @@
 
 import { exec } from 'child-process-promise'
 import { createReadStream } from 'fs'
+import { rimraf } from 'rimraf'
 import { stat, writeFile } from 'fs-extra'
 import getStream from 'get-stream'
 import { pFromCallback } from 'promise-toolbox'
-import rimraf from 'rimraf'
 import tmp from 'tmp'
 
-import { ParsableFile, parseOVAFile } from './ova'
+import { ParsableFile, parseOVAFile } from './ova-read'
 import readVmdkGrainTable from './vmdk-read-table'
 
 const initialDir = process.cwd()
@@ -20,7 +20,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const tmpDir = process.cwd()
   process.chdir(initialDir)
-  await pFromCallback(cb => rimraf(tmpDir, cb))
+  await rimraf(tmpDir)
 })
 
 export class NodeParsableFile extends ParsableFile {
@@ -57,7 +57,9 @@ test('An ova file is parsed correctly', async () => {
   await writeFile(ovfName, xmlContent)
   const rawFileName = 'random-data'
   await exec(`base64 /dev/urandom | head -c 104448 > ${rawFileName}`)
-  await exec(`rm -f ${vmdkFileName} && python /usr/share/pyshared/VMDKstream.py ${rawFileName} ${vmdkFileName}`)
+  await exec(
+    `rm -f ${vmdkFileName} && python /usr/lib/python3/dist-packages/VMDKstream.py ${rawFileName} ${vmdkFileName}`
+  )
   const ovaName = `test.ova`
   await exec(`tar cf ${ovaName} ${ovfName} ${vmdkFileName}`)
   const vmdkParsableFile = new NodeParsableFile(vmdkFileName, (await stat(vmdkFileName)).size)

@@ -1,9 +1,15 @@
 {
   "private": false,
   "name": "@xen-orchestra/log",
-  "version": "0.3.0",
+  "version": "0.7.1",
   "license": "ISC",
   "description": "Logging system with decoupled producers/consumer",
+  "keywords": [
+    "async",
+    "asynchronous",
+    "capture",
+    "context"
+  ],
   "homepage": "https://github.com/vatesfr/xen-orchestra/tree/master/@xen-orchestra/log",
   "bugs": "https://github.com/vatesfr/xen-orchestra/issues",
   "repository": {
@@ -20,13 +26,21 @@
     ">2%"
   ],
   "engines": {
-    "node": ">=6"
+    "node": ">=8.3"
   },
   "dependencies": {
     "lodash": "^4.17.4",
     "promise-toolbox": "^0.21.0"
   },
   "scripts": {
-    "postversion": "npm publish"
+    "postversion": "npm publish",
+    "test": "node --test"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./_*": null,
+    "./.*": null,
+    "./*": "./*.js",
+    "./index": null
   }
 }

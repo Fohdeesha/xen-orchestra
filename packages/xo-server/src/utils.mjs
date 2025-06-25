@@ -55,7 +55,7 @@ export function extractProperty(obj, prop) {
 // -------------------------------------------------------------------
 
 export const getUserPublicProperties = user =>
-  pick(user.properties || user, 'authProviders', 'id', 'email', 'groups', 'permission', 'preferences')
+  pick(user, 'authProviders', 'id', 'email', 'groups', 'permission', 'preferences')
 
 // -------------------------------------------------------------------
 
@@ -87,6 +87,7 @@ export const parseXml = (function () {
   const parser = new XMLParser({
     attributeNamePrefix: '',
     ignoreAttributes: false,
+    ignoreDeclaration: true,
     parseTagValue: false,
     parseAttributeValue: false,
   })
@@ -205,7 +206,7 @@ export const DONE = {}
 // `iteratee`.
 //
 // If `target` is undefined, it defaults to a new array if
-// `collection` is array-like (has a `length` property), otherwise an
+// `collection` is array-like (has a `length` property); otherwise, an
 // object.
 //
 // The context of `iteratee` can be specified via `thisArg`.
@@ -335,3 +336,19 @@ export const unboxIdsFromPattern = pattern => {
   const { id } = pattern
   return typeof id === 'string' ? [id] : id.__or
 }
+
+// -------------------------------------------------------------------
+
+export const isSrWritable = sr => sr !== undefined && sr.content_type !== 'iso' && sr.size > 0
+
+// -------------------------------------------------------------------
+
+export const isReplicaVm = vm => 'start' in vm.blockedOperations && vm.other['xo:backup:job'] !== undefined
+
+// -------------------------------------------------------------------
+export const vmContainsNoBakTag = vm => vm.tags.some(t => t.split('=', 1)[0] === 'xo:no-bak')
+
+// -------------------------------------------------------------------
+
+export const isAlarm = alarm =>
+  alarm.type === 'message' && ['ALARM', 'BOND_STATUS_CHANGED', 'MULTIPATH_PERIODIC_ALERT'].includes(alarm.name)

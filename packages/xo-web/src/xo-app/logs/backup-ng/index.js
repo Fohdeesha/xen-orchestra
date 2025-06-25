@@ -1,3 +1,4 @@
+import * as CM from 'complex-matcher'
 import _, { FormattedDuration } from 'intl'
 import ActionButton from 'action-button'
 import addSubscriptions from 'add-subscriptions'
@@ -10,18 +11,23 @@ import SortedTable from 'sorted-table'
 import Tooltip from 'tooltip'
 import { alert } from 'modal'
 import { Card, CardHeader, CardBlock } from 'card'
-import { connectStore, formatSize } from 'utils'
+import { connectStore, formatSize, NumericDate } from 'utils'
 import { createGetObjectsOfType } from 'selectors'
 import { get } from '@xen-orchestra/defined'
 import { injectState, provideState } from 'reaclette'
 import { isEmpty, filter, map, keyBy } from 'lodash'
 import { withRouter } from 'react-router'
-import { subscribeBackupNgJobs, subscribeBackupNgLogs, subscribeMetadataBackupJobs } from 'xo'
+import {
+  subscribeBackupNgJobs,
+  subscribeBackupNgLogs,
+  subscribeMetadataBackupJobs,
+  subscribeMirrorBackupJobs,
+} from 'xo'
 
 import LogAlertBody from './log-alert-body'
 import LogAlertHeader from './log-alert-header'
 
-import { STATUS_LABELS, LOG_FILTERS, LogDate } from '../utils'
+import { STATUS_LABELS, LOG_FILTERS } from '../utils'
 
 const UL_STYLE = { listStyleType: 'none' }
 
@@ -56,7 +62,7 @@ const GoToJob = decorate([
         const { jobId, location, router, scrollIntoJobs } = this.props
         router.replace({
           ...location,
-          query: { ...location.query, s: `id:${jobId}` },
+          query: { ...location.query, s: new CM.Property('id', new CM.String(jobId)).toString() },
         })
         scrollIntoJobs()
       },
@@ -94,14 +100,14 @@ const COLUMNS = [
   },
   {
     name: _('jobStart'),
-    itemRenderer: log => <LogDate time={log.start} />,
+    itemRenderer: log => <NumericDate timestamp={log.start} />,
     sortCriteria: 'start',
     sortOrder: 'desc',
   },
   {
     default: true,
     name: _('jobEnd'),
-    itemRenderer: log => log.end !== undefined && <LogDate time={log.end} />,
+    itemRenderer: log => log.end !== undefined && <NumericDate timestamp={log.end} />,
     sortCriteria: log => log.end || log.start,
     sortOrder: 'desc',
   },
@@ -118,7 +124,7 @@ const COLUMNS = [
   {
     name: _('labelSize'),
     itemRenderer: ({ tasks: vmTasks, jobId }, { jobs }) => {
-      if (get(() => jobs[jobId].type) !== 'backup' || isEmpty(vmTasks)) {
+      if (!['backup', 'mirrorBackup'].includes(get(() => jobs[jobId].type)) || isEmpty(vmTasks)) {
         return null
       }
 
@@ -136,10 +142,10 @@ const COLUMNS = [
               return
             }
             if (operationTask.message === 'transfer' && vmTransferSize === undefined) {
-              vmTransferSize = operationTask.result.size
+              vmTransferSize = operationTask.result?.size
             }
             if (operationTask.message === 'merge' && vmMergeSize === undefined) {
-              vmMergeSize = operationTask.result.size
+              vmMergeSize = operationTask.result?.size
             }
 
             if (vmTransferSize !== undefined && vmMergeSize !== undefined) {
@@ -168,6 +174,7 @@ export default decorate([
     logs: cb => subscribeBackupNgLogs(logs => cb(logs && filter(logs, log => log.message === 'backup'))),
     jobs: cb => subscribeBackupNgJobs(jobs => cb(keyBy(jobs, 'id'))),
     metadataJobs: cb => subscribeMetadataBackupJobs(jobs => cb(keyBy(jobs, 'id'))),
+    mirrorBackupJobs: cb => subscribeMirrorBackupJobs(jobs => cb(keyBy(jobs, 'id'))),
   }),
   provideState({
     computed: {
@@ -182,7 +189,7 @@ export default decorate([
               }
             : log
         ),
-      jobs: (_, { jobs, metadataJobs }) => ({ ...jobs, ...metadataJobs }),
+      jobs: (_, { jobs, metadataJobs, mirrorBackupJobs }) => ({ ...jobs, ...metadataJobs, ...mirrorBackupJobs }),
     },
   }),
   injectState,

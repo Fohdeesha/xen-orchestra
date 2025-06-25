@@ -1,0 +1,8 @@
+{{#*inline "indentedBlock"}}
+{{>taskBody task=.}}
+{{>reportTemporalDataMd}}
+{{>reportErrorMd task=.}}
+{{>reportWarningsMd task =.}}
+{{/inline}}
+- **{{>taskTitle task=. jobName=''}}** {{getIcon status}}
+  {{> indentedBlock}}

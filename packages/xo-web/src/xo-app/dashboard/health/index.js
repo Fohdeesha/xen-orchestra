@@ -1,5 +1,6 @@
 import _ from 'intl'
 import Component from 'base-component'
+import copy from 'copy-to-clipboard'
 import decorate from 'apply-decorators'
 import { get as getDefined } from '@xen-orchestra/defined'
 import Icon from 'icon'
@@ -13,8 +14,8 @@ import { SelectPool } from 'select-objects'
 import { Container, Row, Col } from 'grid'
 import { Card, CardHeader, CardBlock } from 'card'
 import { FormattedRelative, FormattedTime } from 'react-intl'
-import { countBy, filter, flatten, forEach, includes, isEmpty, map, pick } from 'lodash'
-import { connectStore, formatLogs, formatSize, noop, resolveIds } from 'utils'
+import { countBy, filter, flatten, forEach, includes, isEmpty, keyBy, map, pick } from 'lodash'
+import { addSubscriptions, connectStore, formatLogs, formatSize, noop, resolveIds } from 'utils'
 import {
   deleteMessage,
   deleteMessages,
@@ -25,6 +26,7 @@ import {
   deleteVm,
   deleteVms,
   isSrWritable,
+  subscribeSchedules,
 } from 'xo'
 import {
   areObjectsFetched,
@@ -35,6 +37,8 @@ import {
   createSelector,
   createSort,
 } from 'selectors'
+
+import UnhealthyVdis from './unhealthyVdis'
 
 const SrColContainer = connectStore(() => ({
   container: createGetObject(),
@@ -146,6 +150,11 @@ const SR_COLUMNS = [
     sortCriteria: sr => sr.SR_type,
   },
   {
+    name: <span className='text-capitalize'>{_('srFree')}</span>,
+    itemRenderer: sr => formatSize(sr.size - sr.physical_usage),
+    sortCriteria: sr => sr.size - sr.physical_usage,
+  },
+  {
     name: _('srSize'),
     itemRenderer: sr => formatSize(sr.size),
     sortCriteria: sr => sr.size,
@@ -242,6 +251,14 @@ const ORPHANED_VDI_ACTIONS = [
   },
 ]
 
+const ORPHANED_VDI_INDIVIDUAL_ACTIONS = [
+  {
+    handler: vdi => copy(vdi.uuid),
+    icon: 'clipboard',
+    label: vdi => _('copyUuid', { uuid: vdi.uuid }),
+  },
+]
+
 const CONTROL_DOMAIN_VDIS_ACTIONS = [
   {
     handler: deleteVbds,
@@ -266,22 +283,21 @@ const AttachedVdisTable = decorate([
     vdiSnapshots: createGetObjectsOfType('VDI-snapshot'),
   }),
   ({ columns, rowTransform }) =>
-    ({ pools, srs, vbds, vdis, vdiSnapshots }) =>
-      (
-        <NoObjects
-          actions={CONTROL_DOMAIN_VDIS_ACTIONS}
-          collection={vbds}
-          columns={columns}
-          component={SortedTable}
-          data-pools={pools}
-          data-srs={srs}
-          data-vdis={vdis}
-          data-vdiSnapshots={vdiSnapshots}
-          emptyMessage={_('noControlDomainVdis')}
-          rowTransform={rowTransform}
-          stateUrlParam='s_controldomain'
-        />
-      ),
+    ({ pools, srs, vbds, vdis, vdiSnapshots }) => (
+      <NoObjects
+        actions={CONTROL_DOMAIN_VDIS_ACTIONS}
+        collection={vbds}
+        columns={columns}
+        component={SortedTable}
+        data-pools={pools}
+        data-srs={srs}
+        data-vdis={vdis}
+        data-vdiSnapshots={vdiSnapshots}
+        emptyMessage={_('noControlDomainVdis')}
+        rowTransform={rowTransform}
+        stateUrlParam='s_controldomain'
+      />
+    ),
   {
     columns: [
       {
@@ -395,6 +411,7 @@ const TOO_MANY_SNAPSHOT_COLUMNS = [
     default: true,
     name: _('numberOfSnapshots'),
     itemRenderer: vm => vm.snapshots.length,
+    sortCriteria: vm => vm.snapshots.length,
     sortOrder: 'desc',
   },
 ]
@@ -501,6 +518,14 @@ const ALARM_ACTIONS = [
 
 const HANDLED_VDI_TYPES = new Set(['system', 'user', 'ephemeral'])
 
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000
+
+@addSubscriptions({
+  schedules: cb =>
+    subscribeSchedules(schedules => {
+      cb(keyBy(schedules, 'id'))
+    }),
+})
 @connectStore(() => {
   const getSrs = createGetObjectsOfType('SR')
   const getOrphanVdis = createSort(
@@ -509,7 +534,12 @@ const HANDLED_VDI_TYPES = new Set(['system', 'user', 'ephemeral'])
         Object.assign({}, vdis, snapshotVdis)
       ),
       createSelector(getSrs, srs => vdi => {
-        if (vdi.$VBDs.length !== 0 || !HANDLED_VDI_TYPES.has(vdi.VDI_type)) {
+        if (
+          vdi.$VBDs.length !== 0 || // vdi with a vbd aren't orphans
+          !HANDLED_VDI_TYPES.has(vdi.VDI_type) || // only for vdi with handled types
+          vdi.size === 0 || // empty vdi aren't considered as orphans
+          (vdi.name_label === 'PVS cache VDI' && vdi.name_description === 'PVS cache VDI') // see https://github.com/vatesfr/xen-orchestra/issues/7938
+        ) {
           return false
         }
 
@@ -533,7 +563,9 @@ const HANDLED_VDI_TYPES = new Set(['system', 'user', 'ephemeral'])
     .filter([vm => vm.power_state === 'Running' && (!vm.managementAgentDetected || !vm.pvDriversUpToDate)])
     .sort()
   const getUserSrs = getSrs.filter([isSrWritable])
-  const getAlertMessages = createGetObjectsOfType('message').filter([message => message.name === 'ALARM'])
+  const getAlertMessages = createGetObjectsOfType('message').filter([
+    message => ['ALARM', 'BOND_STATUS_CHANGED', 'MULTIPATH_PERIODIC_ALERT'].includes(message.name),
+  ])
   const getVifsByMac = createGetObjectsOfType('VIF')
     .pick(
       createCollectionWrapper(
@@ -556,6 +588,7 @@ const HANDLED_VDI_TYPES = new Set(['system', 'user', 'ephemeral'])
     hosts: createGetObjectsOfType('host'),
     orphanVdis: getOrphanVdis,
     orphanVmSnapshots: getOrphanVmSnapshots,
+    snapshots: createGetObjectsOfType('VM-snapshot'),
     pools: createGetObjectsOfType('pool'),
     tooManySnapshotsVms: getTooManySnapshotsVms,
     guestToolsVms: getGuestToolsVms,
@@ -631,7 +664,12 @@ export default class Health extends Component {
         const nbHostsPerPool = countBy(hosts, host => host.$pool)
         return filter(selectedPools, pool => {
           const { default_SR } = pool
-          return default_SR !== undefined && !userSrs[default_SR].shared && nbHostsPerPool[pool.id] > 1
+          return (
+            default_SR !== undefined &&
+            userSrs[default_SR] !== undefined &&
+            !userSrs[default_SR].shared &&
+            nbHostsPerPool[pool.id] > 1
+          )
         })
       }
     )
@@ -652,6 +690,24 @@ export default class Health extends Component {
   _getOrphanVdis = createFilter(() => this.props.orphanVdis, this._getPoolPredicate)
 
   _getOrphanVmSnapshots = createFilter(() => this.props.orphanVmSnapshots, this._getPoolPredicate)
+
+  _getOldSnapshots = createSelector(
+    () => this.props.snapshots,
+    () => this.props.schedules,
+    (snapshots, schedules) => {
+      const thresholdDate = Date.now() - THIRTY_DAYS
+      return Object.values(snapshots).filter(snapshot => {
+        if (snapshot.snapshot_time * 1000 > thresholdDate) {
+          return false
+        }
+
+        const scheduleId = snapshot.other?.['xo:backup:schedule']
+        const schedule = scheduleId !== undefined ? schedules?.[scheduleId] : undefined
+
+        return !schedule?.enabled
+      })
+    }
+  )
 
   _getTooManySnapshotsVms = createFilter(() => this.props.tooManySnapshotsVms, this._getPoolPredicate)
 
@@ -772,6 +828,7 @@ export default class Health extends Component {
             </Col>
           </Row>
         )}
+        {props.areObjectsFetched && <UnhealthyVdis />}
         <Row>
           <Col>
             <Card>
@@ -792,6 +849,7 @@ export default class Health extends Component {
                       collection={orphanVdis}
                       columns={ORPHANED_VDI_COLUMNS}
                       filters={ORPHAN_VDI_FILTERS}
+                      individualActions={ORPHANED_VDI_INDIVIDUAL_ACTIONS}
                       stateUrlParam='s_vdis'
                     />
                   )}
@@ -808,6 +866,24 @@ export default class Health extends Component {
               </CardHeader>
               <CardBlock>
                 <AttachedVdisTable poolPredicate={this._getPoolPredicate()} />
+              </CardBlock>
+            </Card>
+          </Col>
+        </Row>
+        <Row>
+          <Col>
+            <Card>
+              <CardHeader>
+                <Icon icon='vm' /> {_('oldSnapshots')}
+              </CardHeader>
+              <CardBlock>
+                <NoObjects
+                  actions={VM_ACTIONS}
+                  collection={props.areObjectsFetched ? this._getOldSnapshots() : null}
+                  columns={VM_COLUMNS}
+                  component={SortedTable}
+                  emptyMessage={_('noOldSnapshots')}
+                />
               </CardBlock>
             </Card>
           </Col>

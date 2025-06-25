@@ -1,3 +1,5 @@
+'use strict'
+
 const {
   computeBatSize,
   computeFullBlockSize,
@@ -17,9 +19,11 @@ const {
 const assert = require('assert')
 const path = require('path')
 const asyncIteratorToStream = require('async-iterator-to-stream')
+const { createLogger } = require('@xen-orchestra/log')
 const { checksumStruct, fuFooter, fuHeader } = require('../_structs')
 const { isVhdAlias, resolveVhdAlias } = require('../aliases')
 
+const { warn } = createLogger('vhd-lib:VhdAbstract')
 exports.VhdAbstract = class VhdAbstract {
   get bitmapSize() {
     return sectorsToBytes(this.sectorsOfBitmap)
@@ -35,14 +39,6 @@ exports.VhdAbstract = class VhdAbstract {
 
   get sectorsPerBlock() {
     return computeSectorsPerBlock(this.header.blockSize)
-  }
-
-  get header() {
-    throw new Error('get header is not implemented')
-  }
-
-  get footer() {
-    throw new Error('get footer not implemented')
   }
 
   /**
@@ -84,10 +80,19 @@ exports.VhdAbstract = class VhdAbstract {
   }
 
   /**
+   * @typedef {Object} BitmapBlock
+   * @property {number} id
+   * @property {Buffer} bitmap
+   *
+   * @typedef {Object} FullBlock
+   * @property {number} id
+   * @property {Buffer} bitmap
+   * @property {Buffer} data
+   * @property {Buffer} buffer - bitmap + data
    *
    * @param {number} blockId
    * @param {boolean} onlyBitmap
-   * @returns {Buffer}
+   * @returns {Promise<BitmapBlock | FullBlock>}
    */
   readBlock(blockId, onlyBitmap = false) {
     throw new Error(`reading  ${onlyBitmap ? 'bitmap of block' : 'block'} ${blockId} is not implemented`)
@@ -102,10 +107,11 @@ exports.VhdAbstract = class VhdAbstract {
    *
    * @returns {number} the merged data size
    */
-  async coalesceBlock(child, blockId) {
+  async mergeBlock(child, blockId) {
+    const isBlockPresent = this.containsBlock(blockId)
     const block = await child.readBlock(blockId)
     await this.writeEntireBlock(block)
-    return block.data.length
+    return isBlockPresent ? 0 : this.fullBlockSize
   }
 
   /**
@@ -189,16 +195,17 @@ exports.VhdAbstract = class VhdAbstract {
     }
   }
 
-  static async rename(handler, sourcePath, targetPath) {
-    try {
-      // delete target if it already exists
-      await VhdAbstract.unlink(handler, targetPath)
-    } catch (e) {}
-    await handler.rename(sourcePath, targetPath)
-  }
-
   static async unlink(handler, path) {
-    const resolved = await resolveVhdAlias(handler, path)
+    let resolved = path
+    try {
+      resolved = await resolveVhdAlias(handler, path)
+    } catch (err) {
+      // broken vhd directory must be unlinkable
+      if (err.code !== 'EISDIR') {
+        throw err
+      }
+      warn('Deleting directly a VhdDirectory', { path, err })
+    }
     try {
       await handler.unlink(resolved)
     } catch (err) {
@@ -236,19 +243,37 @@ exports.VhdAbstract = class VhdAbstract {
     await handler.writeFile(aliasPath, relativePathToTarget)
   }
 
-  stream() {
+  streamSize() {
+    const { header, batSize } = this
+    let fileSize = FOOTER_SIZE + HEADER_SIZE + batSize + FOOTER_SIZE /* the footer at the end */
+
+    // add parentlocator size
+    for (let i = 0; i < PARENT_LOCATOR_ENTRIES; i++) {
+      fileSize += header.parentLocatorEntry[i].platformDataSpace * SECTOR_SIZE
+    }
+
+    // add block size
+    for (let i = 0; i < header.maxTableEntries; i++) {
+      if (this.containsBlock(i)) {
+        fileSize += this.fullBlockSize
+      }
+    }
+
+    assert.strictEqual(fileSize % SECTOR_SIZE, 0)
+    return fileSize
+  }
+  // progress is called with currentBlock, numberOfBlocs
+  // it's an approximation, ignoring the footer/header/bat size
+  stream({ onProgress } = {}) {
     const { footer, batSize } = this
-    const { ...header } = this.header // copy since we don't ant to modifiy the current header
+    const { ...header } = this.header // copy since we don't want to modify the current header
     const rawFooter = fuFooter.pack(footer)
     checksumStruct(rawFooter, fuFooter)
 
     // update them in header
     // update checksum in header
-
+    header.tableOffset = FOOTER_SIZE + HEADER_SIZE
     let offset = FOOTER_SIZE + HEADER_SIZE + batSize
-
-    const rawHeader = fuHeader.pack(header)
-    checksumStruct(rawHeader, fuHeader)
 
     // add parentlocator size
     for (let i = 0; i < PARENT_LOCATOR_ENTRIES; i++) {
@@ -259,10 +284,14 @@ exports.VhdAbstract = class VhdAbstract {
       offset += header.parentLocatorEntry[i].platformDataSpace * SECTOR_SIZE
     }
 
-    assert.strictEqual(offset % SECTOR_SIZE, 0)
+    const rawHeader = fuHeader.pack(header)
+    checksumStruct(rawHeader, fuHeader)
+
+    assert.strictEqual(offset % SECTOR_SIZE, 0, `offset should be aligned to SECTOR_SIZE: ${offset}`)
 
     const bat = Buffer.allocUnsafe(batSize)
     let offsetSector = offset / SECTOR_SIZE
+    let nbBlocks = 0
     const blockSizeInSectors = this.fullBlockSize / SECTOR_SIZE
     let fileSize = offsetSector * SECTOR_SIZE + FOOTER_SIZE /* the footer at the end */
     // compute BAT , blocks starts after parent locator entries
@@ -271,16 +300,24 @@ exports.VhdAbstract = class VhdAbstract {
         bat.writeUInt32BE(offsetSector, i * 4)
         offsetSector += blockSizeInSectors
         fileSize += this.fullBlockSize
+        nbBlocks++
       } else {
         bat.writeUInt32BE(BLOCK_UNUSED, i * 4)
       }
     }
 
+    assert.strictEqual(offset % SECTOR_SIZE, 0)
     const self = this
+    let yielded = 0
+    function trackTransmittedLength(buffer) {
+      yielded += buffer.length
+      assert.ok(yielded <= fileSize, `Max stream length is ${fileSize}, try to send ${yielded}`)
+      return buffer
+    }
     async function* iterator() {
-      yield rawFooter
-      yield rawHeader
-      yield bat
+      yield trackTransmittedLength(rawFooter)
+      yield trackTransmittedLength(rawHeader)
+      yield trackTransmittedLength(bat)
 
       // yield parent locator
 
@@ -291,20 +328,24 @@ exports.VhdAbstract = class VhdAbstract {
           // align data to a sector
           const buffer = Buffer.alloc(space, 0)
           data.copy(buffer)
-          yield buffer
+          yield trackTransmittedLength(buffer)
         }
       }
 
       // yield all blocks
       // since contains() can be costly for synthetic vhd, use the computed bat
+      let nbYielded = 0
       for (let i = 0; i < header.maxTableEntries; i++) {
         if (bat.readUInt32BE(i * 4) !== BLOCK_UNUSED) {
+          nbYielded++
           const block = await self.readBlock(i)
-          yield block.buffer
+          yield trackTransmittedLength(block.buffer)
+          onProgress?.(nbYielded, nbBlocks)
         }
       }
       // yield footer again
-      yield rawFooter
+      yield trackTransmittedLength(rawFooter)
+      assert.strictEqual(yielded, fileSize, `computed stream length is ${fileSize} but sent ${yielded} bytes`)
     }
 
     const stream = asyncIteratorToStream(iterator())
@@ -331,5 +372,56 @@ exports.VhdAbstract = class VhdAbstract {
     const stream = asyncIteratorToStream(iterator())
     stream.length = footer.currentSize
     return stream
+  }
+
+  async containsAllDataOf(child) {
+    await this.readBlockAllocationTable()
+    await child.readBlockAllocationTable()
+    for await (const block of child.blocks()) {
+      const { id, data: childData } = block
+      // block is in child not in parent
+      if (!this.containsBlock(id)) {
+        return false
+      }
+      const { data: parentData } = await this.readBlock(id)
+      if (!childData.equals(parentData)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  async readRawData(start, length, cache, buf) {
+    const header = this.header
+    const blockSize = header.blockSize
+    const startBlockId = Math.floor(start / blockSize)
+    const endBlockId = Math.floor((start + length) / blockSize)
+
+    const startOffset = start % blockSize
+    let copied = 0
+    for (let blockId = startBlockId; blockId <= endBlockId; blockId++) {
+      let data
+      if (this.containsBlock(blockId)) {
+        if (!cache.has(blockId)) {
+          cache.set(
+            blockId,
+            // promise is awaited later, so it won't generate unbounded error
+            this.readBlock(blockId).then(block => {
+              return block.data
+            })
+          )
+        }
+        // the cache contains a promise
+        data = await cache.get(blockId)
+      } else {
+        data = Buffer.alloc(blockSize, 0)
+      }
+      const offsetStart = blockId === startBlockId ? startOffset : 0
+      const offsetEnd = blockId === endBlockId ? (start + length) % blockSize : blockSize
+      data.copy(buf, copied, offsetStart, offsetEnd)
+      copied += offsetEnd - offsetStart
+    }
+    assert.strictEqual(copied, length, 'invalid length')
+    return copied
   }
 }

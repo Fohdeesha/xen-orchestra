@@ -1,8 +1,10 @@
-const fromCallback = require('promise-toolbox/fromCallback')
-const nodemailer = require('nodemailer') // eslint-disable-line n/no-extraneous-import
-const prettyFormat = require('pretty-format') // eslint-disable-line n/no-extraneous-import
+'use strict'
 
-const { evalTemplate, required } = require('../utils')
+const fromCallback = require('promise-toolbox/fromCallback')
+const nodemailer = require('nodemailer') // eslint-disable-line n/no-extraneous-require
+const prettyFormat = require('pretty-format') // eslint-disable-line n/no-extraneous-require
+
+const { evalTemplate, required } = require('../_utils')
 const { NAMES } = require('../levels')
 
 function createTransport({

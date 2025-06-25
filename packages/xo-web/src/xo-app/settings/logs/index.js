@@ -1,19 +1,18 @@
 import React from 'react'
-import { FormattedDate } from 'react-intl'
 import { find, map } from 'lodash'
 
 import _ from 'intl'
 import BaseComponent from 'base-component'
-import Copiable from 'copiable'
 import NoObjects from 'no-objects'
 import SortedTable from 'sorted-table'
 import styles from './index.css'
-import { addSubscriptions, downloadLog } from 'utils'
+import { addSubscriptions, downloadLog, NumericDate } from 'utils'
 import { alert } from 'modal'
 import { createSelector } from 'selectors'
 import { get } from '@xen-orchestra/defined'
 import { reportBug } from 'report-bug-button'
 import { deleteApiLog, deleteApiLogs, subscribeApiLogs, subscribeUsers } from 'xo'
+import RichText from 'rich-text'
 
 const formatMessage = data =>
   `\`\`\`\n${data.method}\n${JSON.stringify(data.params, null, 2)}\n${JSON.stringify(data.error, null, 2).replace(
@@ -66,21 +65,7 @@ const COLUMNS = [
   {
     default: true,
     name: _('logTime'),
-    itemRenderer: log => (
-      <span>
-        {log.time && (
-          <FormattedDate
-            value={new Date(log.time)}
-            month='long'
-            day='numeric'
-            year='numeric'
-            hour='2-digit'
-            minute='2-digit'
-            second='2-digit'
-          />
-        )}
-      </span>
-    ),
+    itemRenderer: log => <span>{log.time && <NumericDate timestamp={log.time} />}</span>,
     sortCriteria: log => log.time,
     sortOrder: 'desc',
   },
@@ -99,7 +84,7 @@ const ACTIONS = [
 
 const INDIVIDUAL_ACTIONS = [
   {
-    handler: log => alert(_('logError'), <Copiable tagName='pre'>{formatLog(log)}</Copiable>),
+    handler: log => alert(_('logError'), <RichText copiable message={formatLog(log)} />),
     icon: 'preview',
     label: _('logDisplayDetails'),
   },

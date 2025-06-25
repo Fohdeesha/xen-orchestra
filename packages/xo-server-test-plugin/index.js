@@ -1,3 +1,7 @@
+/* eslint-disable no-console */
+
+'use strict'
+
 // This is one of the simplest xo-server's plugin than can be created.
 
 // This (optional) schema is used to describe the expected
@@ -9,10 +13,25 @@ exports.configurationSchema = {
   type: 'object',
   properties: {
     foo: {
+      // name of the setting to display in the UI instead of the raw name of property (here `foo`).
+      title: 'Foo',
+
+      // Markdown description for this setting
+      description: 'Value to use when doing foo',
+
       type: 'string',
     },
   },
   required: ['foo'],
+}
+
+// This (optional) dictionary provides example configurations that can be used to help
+// configuring this plugin.
+//
+// The keys are the preset names, and the values are subset of the configuration.
+exports.configurationPresets = {
+  'preset 1': { foo: 'foo value 1' },
+  'preset 2': { foo: 'foo value 2' },
 }
 
 // This (optional) schema is used to test the configuration
@@ -76,3 +95,5 @@ exports.default = function (opts) {
     },
   }
 }
+
+/* eslint-enable no-console */

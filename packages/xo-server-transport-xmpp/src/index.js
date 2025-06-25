@@ -1,5 +1,4 @@
-import fromEvent from 'promise-toolbox/fromEvent'
-import XmppClient from 'node-xmpp-client'
+import { client, xml } from '@xmpp/client'
 
 // ===================================================================
 
@@ -46,17 +45,17 @@ class TransportXmppPlugin {
     this._client = null
   }
 
-  configure(conf) {
-    this._conf = conf
-    this._conf.reconnect = true
+  configure({ host, jid, port, password }) {
+    this._conf = {
+      password,
+      service: Object.assign(new URL('xmpp://localhost'), { hostname: host, port }).href,
+      username: jid,
+    }
   }
 
   async load() {
-    this._client = new XmppClient(this._conf)
-    this._client.on('error', () => {})
-
-    await fromEvent(this._client.connection.socket, 'data')
-    await fromEvent(this._client, 'online')
+    this._client = client(this._conf)
+    await this._client.start()
 
     this._unset = this._set('sendToXmppClient', this._sendToXmppClient)
   }
@@ -71,12 +70,14 @@ class TransportXmppPlugin {
   _sendToXmppClient({ to, message }) {
     for (const receiver of to) {
       this._client.send(
-        new XmppClient.Stanza('message', {
-          to: receiver,
-          type: 'chat',
-        })
-          .c('body')
-          .t(message)
+        xml(
+          'message',
+          {
+            to: receiver,
+            type: 'chat',
+          },
+          xml('body', {}, message)
+        )
       )
     }
   }

@@ -1,5 +1,7 @@
 // FIXME so far, no acls for schedules
 
+import { Task } from '@xen-orchestra/mixins/Tasks.mjs'
+
 export async function getAll() {
   return /* await */ this.getAllSchedules()
 }
@@ -24,7 +26,7 @@ export function create({ cron, enabled, jobId, name, timezone }) {
     jobId,
     name,
     timezone,
-    userId: this.session.get('user_id'),
+    userId: this.apiContext.user.id,
   })
 }
 
@@ -34,7 +36,7 @@ create.params = {
   cron: { type: 'string' },
   enabled: { type: 'boolean', optional: true },
   jobId: { type: 'string' },
-  name: { type: 'string', optional: true },
+  name: { type: 'string', minLength: 0, optional: true },
   timezone: { type: 'string', optional: true },
 }
 
@@ -49,7 +51,7 @@ set.params = {
   enabled: { type: 'boolean', optional: true },
   id: { type: 'string' },
   jobId: { type: 'string', optional: true },
-  name: { type: ['string', 'null'], optional: true },
+  name: { type: ['string', 'null'], minLength: 0, optional: true },
   timezone: { type: 'string', optional: true },
 }
 
@@ -64,3 +66,25 @@ delete_.params = {
 }
 
 export { delete_ as delete }
+
+export async function runSequence({ schedules }) {
+  const t = this.tasks.create({ type: 'xo:schedule:sequence', name: 'Schedule sequence' })
+  await t.run(async () => {
+    const nb = schedules.length
+    const signal = Task.abortSignal
+    for (let i = 0; i < nb; i++) {
+      signal.throwIfAborted()
+      Task.set('progress', Math.round((i * 100) / nb))
+      const idSchedule = schedules[i]
+      // we can't auto resolve array parameters, we have to resolve them by hand
+      const schedule = await this.getSchedule(idSchedule)
+      const job = await this.getJob(schedule.jobId)
+      await this.runJob(job, schedule)
+    }
+  })
+}
+runSequence.permission = 'admin'
+runSequence.description = 'Run a sequence of schedules, one after the other'
+runSequence.params = {
+  schedules: { type: 'array', items: { type: 'string' } },
+}

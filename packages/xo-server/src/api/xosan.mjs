@@ -201,8 +201,7 @@ getVolumeInfo.params = {
     type: 'string',
   },
   infoType: {
-    type: 'string',
-    eq: Object.keys(VOLUME_INFO_TYPES),
+    enum: Object.keys(VOLUME_INFO_TYPES),
   },
 }
 getVolumeInfo.resolve = {
@@ -230,7 +229,7 @@ profileStatus.params = {
     type: 'string',
   },
   changeStatus: {
-    type: 'bool',
+    type: 'boolean',
     optional: true,
   },
 }
@@ -242,7 +241,7 @@ function reconfigurePifIP(xapi, pif, newIP) {
   xapi.call('PIF.reconfigure_ip', pif.$ref, 'Static', newIP, '255.255.255.0', '', '')
 }
 
-// this function should probably become fixSomething(thingToFix, parmas)
+// this function should probably become fixSomething(thingToFix, params)
 export async function fixHostNotInNetwork({ xosanSr, host }) {
   await this.checkXosanLicense({ srId: xosanSr.uuid })
 
@@ -638,18 +637,16 @@ export const createSR = defer(async function (
     ).join(':')
     const config = { server: ipAndHosts[0].address + ':/xosan', backupservers }
     CURRENT_POOL_OPERATIONS[poolId] = { ...OPERATION_OBJECT, state: 5 }
-    const xosanSrRef = await xapi.call(
-      'SR.create',
-      firstSr.$PBDs[0].$host.$ref,
-      config,
-      0,
-      'XOSAN',
-      'XOSAN',
-      'xosan',
-      '',
-      true,
-      {}
-    )
+    const xosanSrRef = await xapi.SR_create({
+      content_type: '',
+      device_config: config,
+      host: firstSr.$PBDs[0].$host.$ref,
+      name_description: 'XOSAN',
+      name_label: 'XOSAN',
+      physical_size: 0,
+      shared: true,
+      type: 'xosan',
+    })
     log.debug('sr created')
     // we just forget because the cleanup actions are stacked in the $onFailure system
     $defer.onFailure(() => xapi.forgetSr(xosanSrRef))
@@ -736,15 +733,16 @@ async function createNewDisk(xapi, sr, vm, diskSize) {
   const vdiMax = 2040 * 1024 * 1024 * 1024
   const createVdiSize = Math.min(vdiMax, diskSize)
   const extensionSize = diskSize - createVdiSize
-  const newDisk = await xapi.createVdi(
-    {
-      name_label: 'xosan_data',
-      name_description: 'Created by XO',
-      size: createVdiSize,
-      sr,
-      sm_config: { type: 'raw' },
-    },
-    { setSmConfig: true }
+  const newDisk = await xapi._getOrWaitObject(
+    await xapi.VDI_create(
+      {
+        name_description: 'Created by XO',
+        name_label: 'xosan_data',
+        SR: sr.$ref,
+        virtual_size: createVdiSize,
+      },
+      { sm_config: { type: 'raw' } }
+    )
   )
   if (extensionSize > 0) {
     const { type, uuid: srUuid, $PBDs } = xapi.getObject(sr)
@@ -759,7 +757,7 @@ async function createNewDisk(xapi, sr, vm, diskSize) {
     }
     await xapi.callAsync('SR.scan', xapi.getObject(sr).$ref)
   }
-  await xapi.createVbd({ vdi: newDisk, vm })
+  await xapi.VBD_create({ VDI: newDisk.$ref, VM: vm.$ref })
   let vbd = (await xapi._waitObjectState(newDisk.$id, disk => Boolean(disk.$VBDs.length))).$VBDs[0]
   vbd = await xapi._waitObjectState(vbd.$id, vbd => Boolean(vbd.device.length))
   return '/dev/' + vbd.device
@@ -813,7 +811,7 @@ async function replaceBrickOnSameVM(xosansr, previousBrick, newLvmSr, brickSize)
     CURRENT_POOL_OPERATIONS[poolId] = { ...OPERATION_OBJECT, state: 3 }
     await umountDisk(localEndpoint, previousBrickRoot)
     const previousVBD = previousVM.$VBDs.find(vbd => vbd.device === previousBrickDevice)
-    await xapi.disconnectVbd(previousVBD)
+    await previousVBD.$unplug()
     await xapi.VDI_destroy(previousVBD.VDI)
     CURRENT_POOL_OPERATIONS[poolId] = { ...OPERATION_OBJECT, state: 4 }
     await xapi.callAsync('SR.scan', xapi.getObject(xosansr).$ref)
@@ -924,7 +922,14 @@ async function _prepareGlusterVm(
       if (error.code === 'MESSAGE_METHOD_UNKNOWN') {
         // VIF.move has been introduced in xenserver 7.0
         await xapi.deleteVif(firstVif.$id)
-        await xapi.createVif(newVM.$id, xosanNetwork.$id, firstVif)
+        await xapi.VIF_create(
+          {
+            ...firstVif,
+            VM: newVM.$ref,
+            network: xosanNetwork.$ref,
+          },
+          firstVif
+        )
       }
     }
   }
@@ -960,10 +965,9 @@ async function _importGlusterVM(xapi, template, lvmsrId) {
     namespace: 'xosan',
     version: template.version,
   })
-  const newVM = await xapi.importVm(templateStream, {
-    srId: lvmsrId,
-    type: 'xva',
-  })
+  const newVM = await xapi._getOrWaitObject(
+    await xapi.VM_import(templateStream, this.getObject(lvmsrId, 'SR')._xapiRef)
+  )
   await xapi.editVm(newVM, {
     autoPoweron: true,
     name_label: 'XOSAN imported VM',
@@ -1118,7 +1122,7 @@ export const removeBricks = defer(async function ($defer, { xosansr, bricks }) {
     // IPV6
     const ips = map(bricks, b => b.split(':')[0])
     const glusterEndpoint = this::_getGlusterEndpoint(xosansr.id)
-    // "peer detach" doesn't allow removal of locahost
+    // "peer detach" doesn't allow removal of localhost
     remove(glusterEndpoint.addresses, ip => ips.includes(ip))
     const dict = _getIPToVMDict(xapi, xosansr.id)
     const brickVMs = map(bricks, b => dict[b])

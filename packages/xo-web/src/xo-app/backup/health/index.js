@@ -13,9 +13,9 @@ import { Container, Row, Col } from 'grid'
 import { confirm } from 'modal'
 import { createGetObjectsOfType, getLoneSnapshots } from 'selectors'
 import { flatMapDepth, keyBy, map, toArray } from 'lodash'
-import { FormattedDate, FormattedRelative, FormattedTime } from 'react-intl'
+import { FormattedRelative, FormattedTime } from 'react-intl'
 import { injectState, provideState } from 'reaclette'
-import { addSubscriptions, connectStore, getDetachedBackupsOrSnapshots, noop } from 'utils'
+import { addSubscriptions, connectStore, getDetachedBackupsOrSnapshots, noop, NumericDate } from 'utils'
 import {
   deleteBackups,
   deleteSnapshot,
@@ -23,23 +23,14 @@ import {
   getRemotes,
   listVmBackups,
   subscribeBackupNgJobs,
+  subscribeMirrorBackupJobs,
   subscribeSchedules,
 } from 'xo'
 
 const DETACHED_BACKUP_COLUMNS = [
   {
     name: _('date'),
-    itemRenderer: backup => (
-      <FormattedDate
-        value={new Date(backup.timestamp)}
-        month='long'
-        day='numeric'
-        year='numeric'
-        hour='2-digit'
-        minute='2-digit'
-        second='2-digit'
-      />
-    ),
+    itemRenderer: backup => <NumericDate timestamp={backup.timestamp} />,
     sortCriteria: 'timestamp',
     sortOrder: 'desc',
   },
@@ -147,10 +138,23 @@ const Health = decorate([
       subscribeSchedules(schedules => {
         cb(keyBy(schedules, 'id'))
       }),
-    jobs: cb =>
+    jobs: cb => {
+      let backupJobs, mirrorJobs
       subscribeBackupNgJobs(jobs => {
-        cb(keyBy(jobs, 'id'))
-      }),
+        backupJobs = jobs
+        if (mirrorJobs !== undefined) {
+          // both are loaded
+          cb(keyBy([...backupJobs, ...mirrorJobs], 'id'))
+        }
+      })
+      subscribeMirrorBackupJobs(jobs => {
+        mirrorJobs = jobs
+        if (backupJobs !== undefined) {
+          // both are loaded
+          cb(keyBy([...backupJobs, ...mirrorJobs], 'id'))
+        }
+      })
+    },
   }),
   connectStore({
     loneSnapshots: getLoneSnapshots,

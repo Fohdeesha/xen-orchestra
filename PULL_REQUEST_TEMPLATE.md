@@ -1,28 +1,46 @@
-### Check list
+### Description
 
-> Check if done, if not relevant leave unchecked.
+_Short explanation of this PR (feel free to re-use commit message)_
 
-- [ ] PR reference the relevant issue (e.g. `Fixes #007` or `See xoa-support#42`)
-- [ ] if UI changes, a screenshot has been added to the PR
-- [ ] documentation updated
-- `CHANGELOG.unreleased.md`:
-  - [ ] enhancement/bug fix entry added
-  - [ ] list of packages to release updated (`${name} v${new version}`)
-- **I have tested added/updated features** (and impacted code)
-  - [ ] unit tests (e.g. [`cron/parse.spec.js`](https://github.com/vatesfr/xen-orchestra/blob/b24400b21de1ebafa1099c56bac1de5c988d9202/%40xen-orchestra/cron/src/parse.spec.js))
-  - [ ] if `xo-server` API changes, the corresponding test has been added to/updated on [`xo-server-test`](https://github.com/vatesfr/xen-orchestra/tree/master/packages/xo-server-test)
-  - [ ] at least manual testing
+### Checklist
 
-### Process
+- Commit
+  - Title follows [commit conventions](https://bit.ly/commit-conventions)
+  - Reference the relevant issue (`Fixes #007`, `See xoa-support#42`, `See https://...`)
+  - If bug fix, add `Introduced by`
+- Changelog
+  - If visible by XOA users, add changelog entry
+  - Update "Packages to release" in `CHANGELOG.unreleased.md`
+- PR
+  - If UI changes, add screenshots
+  - If not finished or not tested, open as _Draft_
 
-1. create a PR as soon as possible
-1. mark it as `WiP:` (Work in Progress) if not ready to be merged
-1. when you want a review, add a reviewer (and only one)
-1. if necessary, update your PR, and re- add a reviewer
+### Review process
 
-From [_the Four Agreements_](https://en.wikipedia.org/wiki/Don_Miguel_Ruiz#The_Four_Agreements):
+If you are an external contributor, you can skip this part. Simply create the pull request, and we'll get back to you as soon as possible.
 
-1. Be impeccable with your word.
-1. Don't take anything personally.
-1. Don't make assumptions.
-1. Always do your best.
+> This 2-passes review process aims to:
+>
+> - develop skills of junior reviewers
+> - limit the workload for senior reviewers
+> - limit the number of unnecessary changes by the _author_
+
+1. The _author_ creates a PR.
+2. Review process:
+   1. The _author_ assigns the _junior reviewer_.
+   2. The _junior reviewer_ conducts their review:
+      - Resolves their comments if they are addressed.
+      - Adds comments if necessary or approves the PR.
+   3. The _junior reviewer_ assigns the _senior reviewer_.
+   4. The _senior reviewer_ conducts their review:
+      - If there are no unresolved comments on the PR → merge.
+      - Otherwise, we continue with **3.**
+3. The _author_ responds to comments and/or makes corrections, and we go back to **2.**
+
+Notes:
+
+1. The _author_ can request a review at any time, even if the PR is still a _Draft_.
+2. In theory, there should not be more than one reviewer at a time.
+3. The _author_ should not make any changes:
+   - When a reviewer is assigned.
+   - Between the _junior_ and _senior_ reviews.

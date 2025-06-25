@@ -1,5 +1,6 @@
 import assert from 'assert'
 import { fromEvent } from 'promise-toolbox'
+import { Task } from '@xen-orchestra/mixins/Tasks.mjs'
 
 export function getPermissionsForUser({ userId }) {
   return this.getPermissionsForUser(userId)
@@ -57,21 +58,12 @@ export async function copyVm({ vm, sr }) {
 
   // full
   {
+    // eslint-disable-next-line no-console
     console.log('export full VM...')
-    const input = await srcXapi.exportVm(vm)
+    const input = (await srcXapi.VM_export(vm._xapiRef)).body
+    // eslint-disable-next-line no-console
     console.log('import full VM...')
-    await tgtXapi.VM_destroy((await tgtXapi.importVm(input, { srId: sr })).$ref)
-  }
-
-  // delta
-  {
-    console.log('export delta VM...')
-    const input = await srcXapi.exportDeltaVm(vm)
-    console.log('import delta VM...')
-    const { vm: copyVm } = await tgtXapi.importDeltaVm(input, {
-      srId: sr,
-    })
-    await tgtXapi.VM_destroy(copyVm.$ref)
+    await tgtXapi.VM_destroy(await tgtXapi.VM_import(input, sr._xapiRef))
   }
 }
 
@@ -115,4 +107,45 @@ changeConnectedXapiHostname.params = {
   hostname: { type: 'string' },
   newObject: { type: 'string', description: "new connection's XO object" },
   oldObject: { type: 'string', description: "current connection's XO object" },
+}
+
+// -------------------------------------------------------------------
+
+export async function createTask({ name, objectId, result, duration }) {
+  const task = this.tasks.create({ name, objectId, progress: 0 })
+  task
+    .run(async () => {
+      const { abortSignal } = Task
+
+      let i = 0
+      let progress = 0
+      const handle = setInterval(() => {
+        progress += (100 - progress) * 0.1
+        Task.set('progress', progress)
+
+        ++i
+        Task.set('name', `${name} (step ${i})`)
+      }, 5e3)
+      try {
+        await new Promise((resolve, reject) => {
+          setTimeout(resolve, duration)
+
+          abortSignal.addEventListener('abort', () => reject(abortSignal.reason))
+        })
+        return result
+      } finally {
+        clearInterval(handle)
+      }
+    })
+    .catch(Function.prototype)
+  return task.id
+}
+
+createTask.permission = 'admin'
+
+createTask.params = {
+  name: { type: 'string', default: 'xo task' },
+  objectId: { type: 'string', optional: true },
+  result: { optional: true },
+  duration: { type: 'number', default: 600e3 },
 }

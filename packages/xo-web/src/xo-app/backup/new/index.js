@@ -21,7 +21,7 @@ import { generateId, linkState } from 'reaclette-utils'
 import { injectIntl } from 'react-intl'
 import { injectState, provideState } from 'reaclette'
 import { Map } from 'immutable'
-import { Number } from 'form'
+import { Number, Toggle } from 'form'
 import { renderXoItemFromId, Remote } from 'render-xo-item'
 import { SelectRemote, SelectSr, SelectVm } from 'select-objects'
 import {
@@ -47,20 +47,23 @@ import getSettingsWithNonDefaultValue from '../_getSettingsWithNonDefaultValue'
 import { canDeltaBackup, constructPattern, destructPattern, FormFeedback, FormGroup, Input, Li, Ul } from './../utils'
 
 export NewMetadataBackup from './metadata'
+export NewMirrorBackup from './mirror'
+export NewSequence from './sequence'
 
 // ===================================================================
 
 const DEFAULT_RETENTION = 1
+const DEFAULT_TIMEZONE = moment.tz.guess()
 const DEFAULT_SCHEDULE = {
   copyRetention: DEFAULT_RETENTION,
   exportRetention: DEFAULT_RETENTION,
   snapshotRetention: DEFAULT_RETENTION,
   cron: '0 0 * * *',
-  timezone: moment.tz.guess(),
+  timezone: DEFAULT_TIMEZONE,
 }
 const RETENTION_LIMIT = 50
 
-const ReportRecipients = decorate([
+export const ReportRecipients = decorate([
   provideState({
     initialState: () => ({
       recipient: '',
@@ -125,9 +128,9 @@ const ReportRecipients = decorate([
   ),
 ])
 
-const SR_BACKEND_FAILURE_LINK = 'https://xen-orchestra.com/docs/backup_troubleshooting.html#sr-backend-failure-44'
+const SR_BACKEND_FAILURE_LINK = 'https://docs.xen-orchestra.com/backup_troubleshooting#sr_backend_failure_44'
 
-const BACKUP_NG_DOC_LINK = 'https://xen-orchestra.com/docs/backup.html'
+export const BACKUP_NG_DOC_LINK = 'https://docs.xen-orchestra.com/backup'
 
 const ThinProvisionedTip = ({ label }) => (
   <Tooltip content={_(label)}>
@@ -144,9 +147,11 @@ const normalizeSettings = ({ copyMode, exportMode, offlineBackupActive, settings
     defined(setting.copyRetention, setting.exportRetention, setting.snapshotRetention) !== undefined
       ? {
           ...setting,
+          cbtDestroySnapshotData: undefined,
           copyRetention: copyMode ? setting.copyRetention : undefined,
           exportRetention: exportMode ? setting.exportRetention : undefined,
           snapshotRetention: snapshotMode && !offlineBackupActive ? setting.snapshotRetention : undefined,
+          preferNbd: undefined,
         }
       : setting
   )
@@ -181,11 +186,15 @@ const getInitialState = ({ preSelectedVmIds, setHomeVmIdsSelection, suggestedExc
     _proxyId: undefined,
     _vmsPattern: undefined,
     backupMode: false,
+    cbtDestroySnapshotData: false,
     compression: undefined,
     crMode: false,
     deltaMode: false,
     drMode: false,
     name: '',
+    nbdConcurrency: 1,
+    nRetriesVmBackupFailures: 0,
+    preferNbd: false,
     remotes: [],
     schedules: {},
     settings: undefined,
@@ -198,7 +207,7 @@ const getInitialState = ({ preSelectedVmIds, setHomeVmIdsSelection, suggestedExc
   }
 }
 
-const DeleteOldBackupsFirst = ({ handler, handlerParam, value }) => (
+export const DeleteOldBackupsFirst = ({ handler, handlerParam, value }) => (
   <ActionButton
     handler={handler}
     handlerParam={handlerParam}
@@ -212,12 +221,11 @@ const DeleteOldBackupsFirst = ({ handler, handlerParam, value }) => (
 )
 
 const New = decorate([
-  New => props =>
-    (
-      <Upgrade place='newBackup' required={2}>
-        <New {...props} />
-      </Upgrade>
-    ),
+  New => props => (
+    <Upgrade place='newBackup' required={2}>
+      <New {...props} />
+    </Upgrade>
+  ),
   connectStore(() => ({
     hostsById: createGetObjectsOfType('host'),
     poolsById: createGetObjectsOfType('pool'),
@@ -257,7 +265,7 @@ const New = decorate([
             [id]: DEFAULT_SCHEDULE,
           }
           settings = {
-            '': state.settings && state.settings.get(''),
+            '': state.settings?.get(''),
             [id]: {
               copyRetention: state.copyMode ? DEFAULT_RETENTION : undefined,
               exportRetention: state.exportMode ? DEFAULT_RETENTION : undefined,
@@ -265,6 +273,20 @@ const New = decorate([
             },
           }
         }
+
+        if (settings[''] === undefined) {
+          settings[''] = { __proto__: null }
+        }
+
+        if (!state.backupMode && !state.deltaMode) {
+          delete settings[''].longTermRetention
+        }
+
+        if (settings['']?.maxExportRate <= 0) {
+          settings[''].maxExportRate = undefined
+        }
+
+        settings[''].timezone = DEFAULT_TIMEZONE
 
         await createBackupNgJob({
           name: state.name,
@@ -332,19 +354,35 @@ const New = decorate([
           })
         )
 
+        const normalizedSettings = normalizeSettings({
+          offlineBackupActive: state.offlineBackupActive,
+          settings: settings || state.propSettings,
+          exportMode: state.exportMode,
+          copyMode: state.copyMode,
+          snapshotMode: state.snapshotMode,
+        }).toObject()
+
+        if (normalizedSettings[''] === undefined) {
+          normalizedSettings[''] = { __proto__: null }
+        }
+
+        if (!state.backupMode && !state.deltaMode) {
+          delete normalizedSettings[''].longTermRetention
+        }
+
+        if (normalizedSettings['']?.maxExportRate <= 0) {
+          normalizedSettings[''].maxExportRate = undefined
+        }
+
+        normalizedSettings[''].timezone = DEFAULT_TIMEZONE
+
         await editBackupNgJob({
           id: props.job.id,
           name: state.name,
           mode: state.isDelta ? 'delta' : 'full',
           compression: state.compression,
           proxy: state.proxyId,
-          settings: normalizeSettings({
-            offlineBackupActive: state.offlineBackupActive,
-            settings: settings || state.propSettings,
-            exportMode: state.exportMode,
-            copyMode: state.copyMode,
-            snapshotMode: state.snapshotMode,
-          }).toObject(),
+          settings: normalizedSettings,
           remotes: state.deltaMode || state.backupMode ? constructPattern(state.remotes) : constructPattern([]),
           srs: state.crMode || state.drMode ? constructPattern(state.srs) : constructPattern([]),
           vms: state.smartMode ? state.vmsSmartPattern : constructPattern(state.vms),
@@ -488,7 +526,19 @@ const New = decorate([
       saveSchedule:
         (
           _,
-          { copyRetention, cron, enabled = true, exportRetention, fullInterval, id, name, snapshotRetention, timezone }
+          {
+            copyRetention,
+            cron,
+            enabled = true,
+            exportRetention,
+            fullInterval,
+            healthCheckSr,
+            healthCheckVmsWithTags,
+            id,
+            name,
+            snapshotRetention,
+            timezone,
+          }
         ) =>
         ({ propSettings, schedules, settings = propSettings }) => ({
           schedules: {
@@ -506,6 +556,8 @@ const New = decorate([
             copyRetention,
             exportRetention,
             fullInterval,
+            healthCheckSr,
+            healthCheckVmsWithTags,
             snapshotRetention,
           }),
         }),
@@ -568,6 +620,18 @@ const New = decorate([
           reportRecipients: (reportRecipients.splice(key, 1), reportRecipients),
         })
       },
+      setLongTermRetention({ setGlobalSettings }, retention, granularity) {
+        const { propSettings, settings = propSettings } = this.state
+        const longTermRetention = settings.getIn(['', 'longTermRetention']) ?? {}
+
+        if (retention > 0) {
+          longTermRetention[granularity] = { retention, settings: {} } // settings will be used for advanced configuration in the future
+        } else {
+          delete longTermRetention[granularity]
+        }
+
+        setGlobalSettings({ longTermRetention: isEmpty(longTermRetention) ? undefined : longTermRetention })
+      },
       setReportWhen:
         ({ setGlobalSettings }, { value }) =>
         () => {
@@ -594,6 +658,11 @@ const New = decorate([
           fullInterval,
         })
       },
+      setMaxExportRate({ setGlobalSettings }, rate) {
+        setGlobalSettings({
+          maxExportRate: rate !== undefined ? rate * (1024 * 1024) : undefined,
+        })
+      },
       setOfflineBackup:
         ({ setGlobalSettings }, { target: { checked: offlineBackup } }) =>
         () => {
@@ -601,13 +670,64 @@ const New = decorate([
             offlineBackup,
           })
         },
+      setPreferNbd:
+        ({ setGlobalSettings }, preferNbd) =>
+        () => {
+          setGlobalSettings({
+            preferNbd,
+          })
+        },
+      setCbtDestroySnapshotData:
+        ({ setGlobalSettings }, cbtDestroySnapshotData) =>
+        () => {
+          setGlobalSettings({
+            cbtDestroySnapshotData,
+          })
+        },
+      setNbdConcurrency({ setGlobalSettings }, nbdConcurrency) {
+        setGlobalSettings({
+          nbdConcurrency,
+        })
+      },
+      setNRetriesVmBackupFailures({ setGlobalSettings }, nRetries) {
+        setGlobalSettings({
+          nRetriesVmBackupFailures: nRetries,
+        })
+      },
+      setBackupReportTpl({ setGlobalSettings }, compactBackupTpl) {
+        setGlobalSettings({
+          backupReportTpl: compactBackupTpl ? 'compactMjml' : 'mjml',
+        })
+      },
+      setHideSuccessfulItems({ setGlobalSettings }, hideSuccessfulItems) {
+        setGlobalSettings({
+          hideSuccessfulItems,
+        })
+      },
+      setMergeBackupsSynchronously({ setGlobalSettings }, mergeBackupsSynchronously) {
+        setGlobalSettings({
+          mergeBackupsSynchronously,
+        })
+      },
     },
     computed: {
       compressionId: generateId,
       formId: generateId,
       inputConcurrencyId: generateId,
+      inputCbtDestroySnapshotData: generateId,
       inputFullIntervalId: generateId,
+      inputMaxExportRate: generateId,
+      inputPreferNbd: generateId,
+      inputNbdConcurrency: generateId,
+      inputNRetriesVmBackupFailures: generateId,
+      inputBackupReportTplId: generateId,
+      inputHideSuccessfulItemsId: generateId,
+      inputMergeBackupsSynchronously: generateId,
       inputTimeoutId: generateId,
+      inputLongTermRetentionDaily: generateId,
+      inputLongTermRetentionWeekly: generateId,
+      inputLongTermRetentionMonthly: generateId,
+      inputLongTermRetentionYearly: generateId,
 
       // In order to keep the user preference, the offline backup is kept in the DB
       // and it's considered active only when the full mode is enabled
@@ -714,13 +834,22 @@ const New = decorate([
     const { propSettings, settings = propSettings } = state
     const compression = defined(state.compression, job.compression, '')
     const {
+      cbtDestroySnapshotData,
       checkpointSnapshot,
       concurrency,
       fullInterval,
+      longTermRetention = {},
+      maxExportRate,
+      nbdConcurrency = 1,
+      nRetriesVmBackupFailures = 0,
       offlineBackup,
       offlineSnapshot,
+      preferNbd,
       reportRecipients,
       reportWhen = 'failure',
+      backupReportTpl = 'mjml',
+      hideSuccessfulItems,
+      mergeBackupsSynchronously,
       timeout,
     } = settings.get('') || {}
 
@@ -943,7 +1072,23 @@ const New = decorate([
                         <label htmlFor={state.inputConcurrencyId}>
                           <strong>{_('concurrency')}</strong>
                         </label>
-                        <Number id={state.inputConcurrencyId} onChange={effects.setConcurrency} value={concurrency} />
+                        <Number
+                          id={state.inputConcurrencyId}
+                          min={1}
+                          onChange={effects.setConcurrency}
+                          value={concurrency}
+                        />
+                      </FormGroup>
+                      <FormGroup>
+                        <label htmlFor={state.inputNRetriesVmBackupFailures}>
+                          <strong>{_('nRetriesVmBackupFailures')}</strong>
+                        </label>
+                        <Number
+                          id={state.inputNRetriesVmBackupFailures}
+                          min={0}
+                          onChange={effects.setNRetriesVmBackupFailures}
+                          value={nRetriesVmBackupFailures}
+                        />
                       </FormGroup>
                       <FormGroup>
                         <label htmlFor={state.inputTimeoutId}>
@@ -972,7 +1117,7 @@ const New = decorate([
                           <Tooltip content={_('clickForMoreInformation')}>
                             <a
                               className='text-info'
-                              href='https://xen-orchestra.com/docs/delta_backups.html#full-backup-interval'
+                              href='https://xen-orchestra.com/docs/incremental_backups.html#key-backup-interval'
                               rel='noopener noreferrer'
                               target='_blank'
                             >
@@ -986,6 +1131,74 @@ const New = decorate([
                           />
                         </FormGroup>
                       )}
+                      {state.isDelta && (
+                        <div>
+                          <FormGroup>
+                            <label htmlFor={state.inputPreferNbd}>
+                              <strong>{_('preferNbd')}</strong>{' '}
+                              <Tooltip content={_('preferNbdInformation')}>
+                                <Icon icon='info' />
+                              </Tooltip>
+                            </label>
+                            <Toggle
+                              className='pull-right'
+                              id={state.inputPreferNbd}
+                              name='preferNbd'
+                              value={preferNbd}
+                              onChange={effects.setPreferNbd}
+                            />
+                          </FormGroup>
+                          <FormGroup>
+                            <label htmlFor={state.inputCbtDestroySnapshotData}>
+                              <strong>{_('cbtDestroySnapshotData')}</strong>{' '}
+                              <Tooltip content={_('cbtDestroySnapshotDataInformation')}>
+                                <Icon icon='info' />
+                              </Tooltip>
+                            </label>
+                            <Tooltip
+                              content={
+                                !preferNbd || state.snapshotMode
+                                  ? _('cbtDestroySnapshotDataDisabledInformation')
+                                  : undefined
+                              }
+                            >
+                              <Toggle
+                                className='pull-right'
+                                id={state.cbtDestroySnapshotData}
+                                name='cbtDestroySnapshotData'
+                                value={preferNbd && cbtDestroySnapshotData && !state.snapshotMode}
+                                disabled={!preferNbd || state.snapshotMode}
+                                onChange={effects.setCbtDestroySnapshotData}
+                              />
+                            </Tooltip>
+                          </FormGroup>
+                        </div>
+                      )}
+                      {state.isDelta && (
+                        <FormGroup>
+                          <label htmlFor={state.inputNbdConcurrency}>
+                            <strong>{_('nbdConcurrency')}</strong>
+                          </label>
+                          <Number
+                            id={state.inputNbdConcurrency}
+                            min={1}
+                            onChange={effects.setNbdConcurrency}
+                            value={nbdConcurrency}
+                            disabled={!state.inputPreferNbd}
+                          />
+                        </FormGroup>
+                      )}
+                      <FormGroup>
+                        <label htmlFor={state.inputMaxExportRate}>
+                          <strong>{_('speedLimit')}</strong>
+                        </label>
+                        <Number
+                          id={state.inputMaxExportRate}
+                          min={0}
+                          onChange={effects.setMaxExportRate}
+                          value={maxExportRate / (1024 * 1024)}
+                        />
+                      </FormGroup>
                       {state.isFull && (
                         <div>
                           <FormGroup>
@@ -1020,6 +1233,43 @@ const New = decorate([
                         offlineSnapshot={offlineSnapshot}
                         setGlobalSettings={effects.setGlobalSettings}
                       />
+                      <FormGroup>
+                        <label htmlFor={state.inputBackupReportTplId}>
+                          <strong>{_('shorterBackupReports')}</strong>
+                        </label>
+                        <Toggle
+                          className='pull-right'
+                          id={state.inputBackupReportTplId}
+                          value={backupReportTpl === 'compactMjml'}
+                          onChange={effects.setBackupReportTpl}
+                        />
+                      </FormGroup>
+                      <FormGroup>
+                        <label htmlFor={state.inputHideSuccessfulItemsId}>
+                          <strong>{_('hideSuccessfulItems')}</strong>
+                        </label>
+                        <Toggle
+                          className='pull-right'
+                          id={state.inputHideSuccessfulItemsId}
+                          value={hideSuccessfulItems}
+                          onChange={effects.setHideSuccessfulItems}
+                        />
+                      </FormGroup>
+                      <FormGroup>
+                        <label htmlFor={state.inputMergeBackupsSynchronously}>
+                          <strong>{_('mergeBackupsSynchronously')}</strong>
+                        </label>{' '}
+                        <Tooltip content={_('mergeBackupsSynchronouslyTooltip')}>
+                          <Icon icon='info' />
+                        </Tooltip>
+                        <Toggle
+                          className='pull-right'
+                          id={state.inputMergeBackupsSynchronously}
+                          name='mergeBackupsSynchronously'
+                          value={mergeBackupsSynchronously}
+                          onChange={effects.setMergeBackupsSynchronously}
+                        />
+                      </FormGroup>
                     </div>
                   )}
                 </CardBlock>
@@ -1072,6 +1322,53 @@ const New = decorate([
                 </CardBlock>
               </Card>
               <Schedules />
+              {(state.backupMode || state.deltaMode) && (
+                <Card>
+                  <CardHeader>{_('longTermRetention')}</CardHeader>
+                  <CardBlock>
+                    <FormGroup>
+                      <label htmlFor={state.inputLongTermRetentionDaily}>
+                        <strong>{_('numberOfDailyBackupsKept')}</strong>
+                      </label>
+                      <Number
+                        id={state.inputLongTermRetentionDaily}
+                        onChange={value => effects.setLongTermRetention(value, 'daily')}
+                        value={longTermRetention.daily?.retention}
+                      />
+                    </FormGroup>
+                    <FormGroup>
+                      <label htmlFor={state.inputLongTermRetentionWeekly}>
+                        <strong>{_('numberOfWeeklyBackupsKept')}</strong>
+                      </label>
+                      <Number
+                        id={state.inputLongTermRetentionWeekly}
+                        onChange={value => effects.setLongTermRetention(value, 'weekly')}
+                        value={longTermRetention.weekly?.retention}
+                      />
+                    </FormGroup>
+                    <FormGroup>
+                      <label htmlFor={state.inputLongTermRetentionMonthly}>
+                        <strong>{_('numberOfMonthlyBackupsKept')}</strong>
+                      </label>
+                      <Number
+                        id={state.inputLongTermRetentionMonthly}
+                        onChange={value => effects.setLongTermRetention(value, 'monthly')}
+                        value={longTermRetention.monthly?.retention}
+                      />
+                    </FormGroup>
+                    <FormGroup>
+                      <label htmlFor={state.inputLongTermRetentionYearly}>
+                        <strong>{_('numberOfYearlyBackupsKept')}</strong>
+                      </label>
+                      <Number
+                        id={state.inputLongTermRetentionYearly}
+                        onChange={value => effects.setLongTermRetention(value, 'yearly')}
+                        value={longTermRetention.yearly?.retention}
+                      />
+                    </FormGroup>
+                  </CardBlock>
+                </Card>
+              )}
             </Col>
           </Row>
           <Row>

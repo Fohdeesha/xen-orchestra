@@ -167,7 +167,7 @@ export default {
   // Original text: "Welcome on Xen Orchestra!"
   homeWelcome: '欢迎使用Xen Orchestra',
 
-  // Original text: "Add your XenServer hosts or pools"
+  // Original text: "Add your XCP-ng hosts or pools"
   homeWelcomeText: '添加您的XenServer主机或资源池',
 
   // Original text: "Want some help?"
@@ -1739,7 +1739,7 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: '到存储库',
 
-  // Original text: "VMs to import"
+  // Original text: "VM{nVms, plural, one {} other {s}} to import"
   vmsToImport: '导入虚拟机',
 
   // Original text: "Reset"
@@ -2064,12 +2064,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'Xen Orchestra',
 
-  // Original text: "server"
-  xenOrchestraServer: '服务器',
-
-  // Original text: "web client"
-  xenOrchestraWeb: 'Web客户端',
-
   // Original text: "No pro support provided!"
   noProSupport: '不提供专业支持！',
 
@@ -2157,8 +2151,8 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: '社区版本没有可用的升级',
 
-  // Original text: "Please consider subscribe and try it with all features for free during 15 days on"
-  noUpdaterSubscribe: '请考虑订购或在15天内免费试用所有功能',
+  // Original text: "Please consider subscribe and try it with all features for free during 30 days on"
+  noUpdaterSubscribe: '请考虑订购或在30天内免费试用所有功能',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning: '由于相关依赖关系的问题，手动更新将跑坏你当前的安全，请小心使用',

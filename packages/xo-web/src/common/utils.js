@@ -146,6 +146,11 @@ export { default as Debug } from './debug'
 // -------------------------------------------------------------------
 
 // Returns the current XOA Plan or the Plan name if number given
+/**
+ * @deprecated
+ *
+ * Use `getXoaPlan` from `xoa-plans` instead
+ */
 export const getXoaPlan = plan => {
   switch (plan || +process.env.XOA_PLAN) {
     case 1:
@@ -191,7 +196,7 @@ export const osFamily = invoke(
     osx: ['osx'],
     redhat: ['redhat', 'rhel'],
     solaris: ['solaris'],
-    suse: ['sles', 'suse'],
+    suse: ['sles', 'suse', 'opensuse', 'opensuse-leap', 'opensuse-microos'],
     ubuntu: ['ubuntu'],
     windows: ['windows'],
   },
@@ -220,8 +225,14 @@ function safeHumanFormat(value, opts) {
 
 export const formatLogs = logs =>
   Promise.all(
-    map(logs, ({ body }, id) => {
-      const matches = /^value:\s*([0-9.]+)\s+config:\s*([^]*)$/.exec(body)
+    map(logs, ({ body, name }, id) => {
+      if (['BOND_STATUS_CHANGED', 'MULTIPATH_PERIODIC_ALERT'].includes(name)) {
+        // for these alarms, body is a string
+        // ex: "body": "The status of the eth0+eth1 bond is: 1/2 up"
+        return { name: body, id }
+      }
+      //  value can be: float, Infinity, -Infinity and NaN
+      const matches = /^value:\s*(Infinity|NaN|-Infinity|[0-9.]+)\s+config:\s*([^]*)$/.exec(body)
       if (matches === null) {
         return
       }
@@ -242,7 +253,7 @@ export const formatLogs = logs =>
 
 export const formatSize = bytes => (bytes != null ? safeHumanFormat(bytes, { scale: 'binary', unit: 'B' }) : 'N/D')
 
-export const formatSizeShort = bytes => safeHumanFormat(bytes, { scale: 'binary', unit: 'B', decimals: 0 })
+export const formatSizeShort = bytes => safeHumanFormat(bytes, { scale: 'binary', unit: 'B', maxDecimals: 'auto' })
 
 export const formatSizeRaw = bytes => humanFormat.raw(bytes, { scale: 'binary', unit: 'B' })
 
@@ -516,6 +527,24 @@ export const createFakeProgress = (() => {
   }
 })()
 
+const padNumber2 = n => (n < 10 ? '0' + n : String(n))
+
+/**
+ * Format a Date object or a ECMAScript timestamp
+ *
+ * The format is very close to the date (YYYY-MM-DD) time (hh:mm) representation
+ * of ISO 8601 expect the T separator is replaced by a whitespace for readability.
+ */
+export const NumericDate = ({ timestamp }) => {
+  const d = timestamp instanceof Date ? timestamp : new Date(timestamp)
+  return (
+    <span>
+      {d.getFullYear()}-{padNumber2(d.getMonth() + 1)}-{padNumber2(d.getDate())} {padNumber2(d.getHours())}:
+      {padNumber2(d.getMinutes())}
+    </span>
+  )
+}
+
 export const ShortDate = ({ timestamp }) => (
   <FormattedDate value={timestamp} month='short' day='numeric' year='numeric' />
 )
@@ -582,9 +611,11 @@ export const safeDateFormat = ms => new Date(ms).toISOString().replace(/:/g, '_'
 // ===================================================================
 
 export const downloadLog = ({ log, date, type }) => {
+  const isJson = typeof log !== 'string'
+
   const anchor = document.createElement('a')
-  anchor.href = window.URL.createObjectURL(createBlobFromString(log))
-  anchor.download = `${safeDateFormat(date)} - ${type}.log`
+  anchor.href = window.URL.createObjectURL(createBlobFromString(isJson ? JSON.stringify(log, null, 2) : log))
+  anchor.download = `${safeDateFormat(date)} - ${type}.${isJson ? 'json' : 'log'}`
   anchor.style.display = 'none'
   document.body.appendChild(anchor)
   anchor.click()
@@ -593,7 +624,7 @@ export const downloadLog = ({ log, date, type }) => {
 
 // ===================================================================
 
-// Creates compare function based on different criterias
+// Creates compare function based on different criteria
 //
 // ```js
 // [{ name: 'bar', value: v2 }, { name: 'foo', value: v1 }].sort(
@@ -643,7 +674,13 @@ export const adminOnly = Component =>
 // ===================================================================
 
 export const TryXoa = ({ page }) => (
-  <a href={`https://xen-orchestra.com/#/xoa?pk_campaign=xoa_source_upgrade&pk_kwd=${page}`}>{_('tryXoa')}</a>
+  <a
+    href={`https://xen-orchestra.com/#/xoa?pk_campaign=xoa_source_upgrade&pk_kwd=${page}`}
+    target='_blank'
+    rel='noreferrer'
+  >
+    {_('tryXoa')}
+  </a>
 )
 
 // ===================================================================
@@ -662,12 +699,12 @@ export const getDetachedBackupsOrSnapshots = (backupsOrSnapshots, { jobs, schedu
       vm === undefined
         ? 'missingVm'
         : job === undefined
-        ? 'missingJob'
-        : schedules[scheduleId] === undefined
-        ? 'missingSchedule'
-        : !createPredicate(omit(job.vms, 'power_state'))(vm)
-        ? 'missingVmInJob'
-        : undefined
+          ? 'missingJob'
+          : schedules[scheduleId] === undefined
+            ? 'missingSchedule'
+            : !createPredicate(omit(job.vms, 'power_state'))(vm)
+              ? 'missingVmInJob'
+              : undefined
 
     if (reason !== undefined) {
       detachedBackupsOrSnapshots.push({

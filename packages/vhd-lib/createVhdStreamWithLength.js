@@ -1,6 +1,7 @@
-const assert = require('assert')
+'use strict'
+
 const { pipeline, Transform } = require('readable-stream')
-const { readChunk } = require('@vates/read-chunk')
+const { readChunkStrict } = require('@vates/read-chunk')
 
 const checkFooter = require('./checkFooter')
 const checkHeader = require('./_checkHeader')
@@ -40,9 +41,12 @@ module.exports = async function createVhdStreamWithLength(stream) {
   let streamPosition = 0
 
   async function readStream(length) {
-    const chunk = await readChunk(stream, length)
-    assert.strictEqual(chunk.length, length)
-    streamPosition += chunk.length
+    if (length === 0) {
+      return Buffer.alloc(0)
+    }
+
+    const chunk = await readChunkStrict(stream, length)
+    streamPosition += length
     readBuffers.push(chunk)
     return chunk
   }

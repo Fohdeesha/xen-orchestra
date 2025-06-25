@@ -1,18 +1,28 @@
 import emitAsync from '@xen-orchestra/emit-async'
+import Obfuscate from '@vates/obfuscate'
+import SonicBoom from 'sonic-boom'
+import { captureLogs } from '@xen-orchestra/log/capture'
 import { createLogger } from '@xen-orchestra/log'
+import { finished } from 'node:stream/promises'
+import { inspect } from 'node:util'
+import { join } from 'node:path'
+import { NAMES } from '@xen-orchestra/log/levels'
+import { tmpdir } from 'node:os'
+import { unlink } from 'node:fs/promises'
 
+import cloneDeep from 'lodash/cloneDeep.js'
 import forEach from 'lodash/forEach.js'
 import kindOf from 'kindof'
 import ms from 'ms'
-import schemaInspector from 'schema-inspector'
-import { getBoundPropertyDescriptor } from 'bind-property-descriptor'
+import { AsyncLocalStorage } from 'async_hooks'
 import { format, JsonRpcError, MethodNotFound } from 'json-rpc-peer'
 
 import * as methods from '../api/index.mjs'
-import * as sensitiveValues from '../sensitive-values.mjs'
-import { noop, serializeError } from '../utils.mjs'
+import Connection from '../connection.mjs'
+import { noop, safeDateFormat, serializeError } from '../utils.mjs'
 
 import * as errors from 'xo-common/api-errors.js'
+import { compileXoJsonSchema } from './_xoJsonSchema.mjs'
 
 // ===================================================================
 
@@ -23,6 +33,29 @@ const ALLOWED_METHOD_PROPS = {
   params: true,
   permission: true,
   resolve: true,
+}
+
+const NO_LOG_METHODS = {
+  __proto__: null,
+
+  // 2021-02-11: Work-around: ECONNREFUSED error can be triggered by
+  // 'host.stats' method because there is no connection to the host during a
+  // toolstack restart and xo-web may call it often
+  'host.stats': true,
+
+  // 2020-07-10: Work-around: many kinds of error can be triggered by
+  // 'pool.listMissingPatches' method, which can generates a lot of logs due to the fact that xo-web
+  // uses 5s active subscriptions to call it.
+  'pool.listMissingPatches': true,
+
+  // 2024-02-05: Work-around: in case of XO Proxy errors, `proxy.getApplianceUpdaterState` will
+  // flood the logs.
+  'proxy.getApplianceUpdaterState': true,
+
+  // 2024-07-09 work-around to avoid flood of MESSAGE_METHOD_UNKNOWN and failed XO tasks
+  // because following methods are not available in XAPIs older than 8.3,
+  'pool.getGuestSecureBootReadiness': true,
+  'vm.getSecurebootReadiness': true,
 }
 
 const PERMISSIONS = {
@@ -52,25 +85,42 @@ const XAPI_ERROR_TO_XO_ERROR = {
   VM_MISSING_PV_DRIVERS: ([vm], getId) => errors.vmMissingPvDrivers({ vm: getId(vm) }),
 }
 
-const hasPermission = (user, permission) => PERMISSIONS[user.permission] >= PERMISSIONS[permission]
+const hasPermission = (actual, expected) => PERMISSIONS[actual] >= PERMISSIONS[expected]
 
 function checkParams(method, params) {
-  const schema = method.params
-  if (!schema) {
-    return
+  // Parameters suffixed by `?` are marked as ignorable by the client and
+  // ignored if unsupported by this version of the API
+  //
+  // This simplifies compatibility with older version of the API if support
+  // of the parameter is preferable but not necessary
+  const ignorableParams = new Set()
+  for (const key of Object.keys(params)) {
+    if (key.endsWith('?')) {
+      const rawKey = key.slice(0, -1)
+      if (Object.hasOwn(params, rawKey)) {
+        throw new Error(`conflicting keys: ${rawKey} and ${key}`)
+      }
+      params[rawKey] = params[key]
+      delete params[key]
+      ignorableParams.add(rawKey)
+    }
   }
 
-  const result = schemaInspector.validate(
-    {
-      properties: schema,
-      strict: true,
-      type: 'object',
-    },
-    params
-  )
+  const { validate } = method
+  if (validate !== undefined) {
+    if (!validate(params)) {
+      const vErrors = new Set(validate.errors)
+      for (const error of vErrors) {
+        if (error.schemaPath === '#/additionalProperties' && ignorableParams.has(error.params.additionalProperty)) {
+          delete params[error.params.additionalProperty]
+          vErrors.delete(error)
+        }
+      }
 
-  if (!result.valid) {
-    throw errors.invalidParameters(result.error)
+      if (vErrors.size !== 0) {
+        throw errors.invalidParameters(Array.from(vErrors))
+      }
+    }
   }
 }
 
@@ -82,8 +132,8 @@ function checkPermission(method) {
     return
   }
 
-  const { user } = this
-  if (!user) {
+  const { apiContext } = this
+  if (!apiContext.user) {
     throw errors.unauthorized(permission)
   }
 
@@ -91,7 +141,7 @@ function checkPermission(method) {
     return
   }
 
-  if (!hasPermission(user, permission)) {
+  if (!hasPermission(apiContext.permission, permission)) {
     throw errors.unauthorized(permission)
   }
 }
@@ -102,12 +152,9 @@ async function resolveParams(method, params) {
     return params
   }
 
-  const { user } = this
-  if (!user) {
+  if (!this.apiContext.user) {
     throw errors.unauthorized()
   }
-
-  const userId = user.id
 
   // Do not alter the original object.
   params = { ...params }
@@ -138,7 +185,7 @@ async function resolveParams(method, params) {
     }
   })
 
-  await this.checkPermissions(userId, permissions)
+  await this.checkPermissions(permissions)
 
   return params
 }
@@ -146,6 +193,17 @@ async function resolveParams(method, params) {
 // -------------------------------------------------------------------
 
 export default class Api {
+  #apiContext = new AsyncLocalStorage()
+  #connections = new Set()
+
+  get apiConnections() {
+    return this.#connections
+  }
+
+  get apiContext() {
+    return this.#apiContext.getStore()
+  }
+
   constructor(app) {
     this._logger = null
     this._methods = { __proto__: null }
@@ -161,20 +219,58 @@ export default class Api {
     return this._methods
   }
 
-  addApiMethod(name, method) {
+  addApiMethod(
+    name,
+    method,
+    {
+      description = method.description,
+      params = method.params,
+      permission = method.permission,
+      resolve = method.resolve,
+    } = {}
+  ) {
     const methods = this._methods
 
     if (name in methods) {
       throw new Error(`API method ${name} already exists`)
     }
 
-    Object.keys(method).forEach(prop => {
-      if (!(prop in ALLOWED_METHOD_PROPS)) {
-        throw new Error(`invalid prop ${prop} for API method ${name}`)
-      }
-    })
+    // alias
+    if (typeof method === 'string') {
+      Object.defineProperty(methods, name, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return methods[method]
+        },
+      })
+    } else {
+      Object.keys(method).forEach(prop => {
+        if (!(prop in ALLOWED_METHOD_PROPS)) {
+          throw new Error(`invalid prop ${prop} for API method ${name}`)
+        }
+      })
 
-    methods[name] = method
+      let validate
+      if (params !== undefined) {
+        try {
+          validate = compileXoJsonSchema({ type: 'object', properties: cloneDeep(params) })
+        } catch (error) {
+          log.warn('failed to compile method params schema', {
+            error,
+            method: name,
+          })
+          throw error
+        }
+      }
+
+      methods[name] = Object.assign(
+        function apiWrapper() {
+          return method.apply(this, arguments)
+        },
+        { description, params, permission, resolve, validate }
+      )
+    }
 
     let remove = () => {
       delete methods[name]
@@ -190,15 +286,19 @@ export default class Api {
     const addMethod = (method, name) => {
       name = base + name
 
-      if (typeof method === 'function') {
+      const type = typeof method
+      if (type === 'string') {
+        removes.push(this.addApiMethod(name, base + method))
+      } else if (type === 'function') {
         removes.push(this.addApiMethod(name, method))
-        return
+      } else if (Array.isArray(method)) {
+        removes.push(this.addApiMethod(name, ...method))
+      } else {
+        const oldBase = base
+        base = name + '.'
+        forEach(method, addMethod)
+        base = oldBase
       }
-
-      const oldBase = base
-      base = name + '.'
-      forEach(method, addMethod)
-      base = oldBase
     }
 
     try {
@@ -218,51 +318,53 @@ export default class Api {
     return remove
   }
 
-  async callApiMethod(session, name, params = {}) {
-    const app = this._app
-    const startTime = Date.now()
-
+  async callApiMethod(connection, name, params = {}) {
     const method = this._methods[name]
     if (!method) {
       throw new MethodNotFound(name)
     }
 
-    // create the context which is an augmented XO
-    const context = (() => {
-      const descriptors = {
-        api: {
-          // Used by system.*().
-          value: this,
-        },
-        session: {
-          value: session,
-        },
-      }
+    let user
+    const userId = connection.get('user_id', undefined)
+    if (userId !== undefined) {
+      user = await this._app.getUser(userId)
+    }
 
-      let obj = app
-      do {
-        Object.getOwnPropertyNames(obj).forEach(name => {
-          if (!(name in descriptors)) {
-            descriptors[name] = getBoundPropertyDescriptor(obj, name, app)
-          }
-        })
-      } while ((obj = Reflect.getPrototypeOf(obj)) !== null)
+    return this.runWithApiContext(user, () => {
+      this.apiContext.connection = connection
 
-      return Object.create(null, descriptors)
-    })()
+      return this.#callApiMethod(name, method, params)
+    })
+  }
 
-    // Fetch and inject the current user.
-    const userId = session.get('user_id', undefined)
-    context.user = userId && (await app.getUser(userId))
-    const userName = context.user ? context.user.email : '(unknown user)'
+  async runWithApiContext(user, fn) {
+    const apiContext = { __proto__: null }
+
+    if (user !== undefined) {
+      apiContext.user = user
+      apiContext.permission = user.permission
+    } else {
+      apiContext.permission = 'none'
+    }
+
+    return this.#apiContext.run(apiContext, fn)
+  }
+
+  async #callApiMethod(name, method, { _log, ...params }) {
+    const app = this._app
+    const startTime = Date.now()
+
+    const { connection, user } = this.apiContext
+
+    const userName = user?.email ?? '(unknown user)'
 
     const data = {
       callId: Math.random().toString(36).slice(2),
-      userId,
+      userId: user?.id,
       userName,
-      userIp: session.get('user_ip', undefined),
+      userIp: connection.get('user_ip', undefined),
       method: name,
-      params: sensitiveValues.replace(params, '* obfuscated *'),
+      params: Obfuscate.replace(params, '* obfuscated *'),
       timestamp: Date.now(),
     }
 
@@ -278,7 +380,11 @@ export default class Api {
     )
 
     try {
-      await checkPermission.call(context, method)
+      if (_log !== undefined && this.apiContext.permission !== 'admin') {
+        throw errors.unauthorized('admin')
+      }
+
+      await checkPermission.call(app, method)
 
       // API methods are in a namespace.
       // Some methods use the namespace or an id parameter like:
@@ -300,11 +406,68 @@ export default class Api {
         }
       }
 
-      checkParams.call(context, method, params)
+      checkParams.call(app, method, params)
 
-      const resolvedParams = await resolveParams.call(context, method, params)
+      const resolvedParams = await resolveParams.call(app, method, params)
 
-      let result = await method.call(context, resolvedParams)
+      const run = () =>
+        name in NO_LOG_METHODS
+          ? method.call(app, resolvedParams)
+          : app.tasks
+              .create(
+                { name: 'API call: ' + name, method: name, params: data.params, type: 'api.call' },
+                { clearLogOnSuccess: true }
+              )
+              .run(() => method.call(app, resolvedParams))
+
+      if (_log === undefined) {
+        _log = app.config.getOptional(['api', 'logs', name]) ?? false
+      }
+      let result
+      if (_log) {
+        const file = join(tmpdir(), `xo-api-${safeDateFormat(new Date())}-${name}.log`)
+        const stream = new SonicBoom({
+          dest: file,
+          mode: 0o600,
+        }).on('error', error => {
+          captureLogs(undefined, () => log.warn(error))
+        })
+
+        let success = true
+        try {
+          result = await captureLogs((log, fallbackTransport) => {
+            fallbackTransport(log)
+
+            const { time, level, namespace, message, data } = log
+            const line = [time.toISOString(), namespace, '[' + NAMES[level] + ']', message]
+            if (data != null) {
+              line.push(inspect(data))
+            }
+
+            stream.write(line.join(' ') + '\n')
+          }, run)
+        } catch (error) {
+          success = false
+
+          throw error
+        } finally {
+          const deleteFile = success && _log === 'failure'
+
+          if (deleteFile) {
+            stream.destroy()
+          } else {
+            stream.end()
+          }
+
+          await finished(stream)
+
+          if (deleteFile) {
+            await unlink(file).catch(log.warn)
+          }
+        }
+      } else {
+        result = await run()
+      }
 
       // If nothing was returned, consider this operation a success
       // and return true.
@@ -316,7 +479,7 @@ export default class Api {
 
       // it's a special case in which the user is defined at the end of the call
       if (data.method === 'session.signIn') {
-        const { id, email } = await app.getUser(session.get('user_id'))
+        const { id, email } = await app.getUser(connection.get('user_id'))
         data.userId = id
         data.userName = email
       }
@@ -345,13 +508,7 @@ export default class Api {
         Date.now() - startTime
       )}] =!> ${error}`
 
-      // 2020-07-10: Work-around: many kinds of error can be triggered by
-      // 'pool.listMissingPatches' method, which can generates a lot of logs due to the fact that xo-web
-      // uses 5s active subscriptions to call it.
-      // 2021-02-11: Work-around: ECONNREFUSED error can be triggered by
-      // 'host.stats' method because there is no connection to the host during a
-      // toolstack restart and xo-web may call it often
-      if (name !== 'pool.listMissingPatches' && name !== 'host.stats') {
+      if (!(name in NO_LOG_METHODS)) {
         this._logger.error(message, {
           ...data,
           duration: Date.now() - startTime,
@@ -376,11 +533,34 @@ export default class Api {
         })
       }
 
+      // don't return *unknown error from the peer* if the user is admin
+      if (error.toJsonRpcError === undefined && user?.permission === 'admin') {
+        throw new JsonRpcError(error.message, undefined, serializeError(serializedError))
+      }
+
       throw error
     }
   }
 
-  registerApiHttpRequest(method, session, fn, data, { exposeAllErrors = false, ...opts } = {}) {
+  createApiConnection(remoteAddress) {
+    const connections = this.#connections
+
+    const connection = new Connection()
+    connection.set('user_ip', remoteAddress)
+
+    connections.add(connection)
+    connection.on('close', () => {
+      connections.delete(connection)
+
+      log.debug(`- WebSocket connection (${remoteAddress}) (${connections.size} connected)`)
+    })
+
+    log.debug(`+ WebSocket connection (${remoteAddress}) (${connections.size} connected)`)
+
+    return connection
+  }
+
+  registerApiHttpRequest(method, connection, fn, data, { exposeAllErrors = false, ...opts } = {}) {
     const app = this._app
     const logger = this._logger
     return app.registerHttpRequest(
@@ -389,13 +569,13 @@ export default class Api {
         try {
           return await fn.apply(this, arguments)
         } catch (error) {
-          const userId = session.get('user_id', undefined)
+          const userId = connection.get('user_id', undefined)
           const user = userId && (await app.getUser(userId))
           logger.error(`handleVmImport =!> ${error}`, {
             callId: Math.random().toString(36).slice(2),
             // userId,
             userName: user?.email ?? '(unknown user)',
-            userIp: session.get('user_ip', undefined),
+            userIp: connection.get('user_ip', undefined),
             method: `HTTP handler of ${method}`,
             timestamp,
             duration: Date.now() - timestamp,

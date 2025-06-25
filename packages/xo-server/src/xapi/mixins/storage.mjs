@@ -1,13 +1,10 @@
 import filter from 'lodash/filter.js'
 import forEach from 'lodash/forEach.js'
 import groupBy from 'lodash/groupBy.js'
-import { decorateWith } from '@vates/decorate-with'
+import { decorateObject } from '@vates/decorate-with'
 import { defer } from 'golike-defer'
-import { createLogger } from '@xen-orchestra/log'
 
-const log = createLogger('xo:storage')
-
-export default {
+const methods = {
   _connectAllSrPbds(sr) {
     return Promise.all(sr.$PBDs.map(pbd => this._plugPbd(pbd)))
   },
@@ -52,71 +49,62 @@ export default {
     await this._unplugPbd(this.getObject(id))
   },
 
-  _getUnhealthyVdiChainLength(uuid, childrenMap, cache) {
-    let length = cache[uuid]
-    if (length === undefined) {
+  _getVdiChainsInfo(uuid, childrenMap, cache, resultContainer) {
+    let info = cache[uuid]
+    if (info === undefined) {
       const children = childrenMap[uuid]
-      length = children !== undefined && children.length === 1 ? 1 : 0
-      try {
-        const parent = this.getObjectByUuid(uuid).sm_config['vhd-parent']
+      const unhealthyLength = children !== undefined && children.length === 1 ? 1 : 0
+      resultContainer.nUnhealthyVdis += unhealthyLength
+      const vdi = this.getObjectByUuid(uuid, undefined)
+      if (vdi === undefined) {
+        info = { unhealthyLength, missingParent: uuid }
+      } else {
+        const parent = vdi.sm_config['vhd-parent']
         if (parent !== undefined) {
-          length += this._getUnhealthyVdiChainLength(parent, childrenMap, cache)
+          info = this._getVdiChainsInfo(parent, childrenMap, cache, resultContainer)
+          info.unhealthyLength += unhealthyLength
+        } else {
+          info = { unhealthyLength }
         }
-      } catch (error) {
-        log.warn(`Xapi#_getUnhealthyVdiChainLength(${uuid})`, { error })
       }
-      cache[uuid] = length
+      cache[uuid] = info
     }
-    return length
+    return info
   },
 
-  getUnhealthyVdiChainsLength(sr) {
+  getVdiChainsInfo(sr) {
     const vdis = this.getObject(sr).$VDIs
     const unhealthyVdis = { __proto__: null }
     const children = groupBy(vdis, 'sm_config.vhd-parent')
+    const vdisWithUnknownVhdParent = { __proto__: null }
+    const resultContainer = { nUnhealthyVdis: 0 }
+
     const cache = { __proto__: null }
     forEach(vdis, vdi => {
+      if (vdi === undefined) {
+        return
+      }
       if (vdi.managed && !vdi.is_a_snapshot) {
         const { uuid } = vdi
-        const length = this._getUnhealthyVdiChainLength(uuid, children, cache)
-        if (length !== 0) {
-          unhealthyVdis[uuid] = length
+        const { unhealthyLength, missingParent } = this._getVdiChainsInfo(uuid, children, cache, resultContainer)
+
+        if (unhealthyLength !== 0) {
+          unhealthyVdis[uuid] = unhealthyLength
+        }
+        if (missingParent !== undefined) {
+          vdisWithUnknownVhdParent[uuid] = missingParent
         }
       }
     })
-    return unhealthyVdis
-  },
 
-  async createSr({
-    hostRef,
-
-    content_type = 'user', // recommended by Citrix
-    device_config = {},
-    name_description = '',
-    name_label,
-    shared = false,
-    physical_size = 0,
-    sm_config = {},
-    type,
-  }) {
-    const srRef = await this.call(
-      'SR.create',
-      hostRef,
-      device_config,
-      physical_size,
-      name_label,
-      name_description,
-      type,
-      content_type,
-      shared,
-      sm_config
-    )
-
-    return (await this.barrier(srRef)).uuid
+    return {
+      vdisWithUnknownVhdParent,
+      unhealthyVdis,
+      ...resultContainer,
+    }
   },
 
   // This function helps to reattach a forgotten NFS/iSCSI/HBA SR
-  @decorateWith(defer)
   async reattachSr($defer, { uuid, nameLabel, nameDescription, type, deviceConfig }) {
     const srRef = await this.call('SR.introduce', uuid, nameLabel, nameDescription, type, 'user', true, {})
     $defer.onFailure(() => this.forgetSr(srRef))
@@ -139,3 +127,7 @@ export default {
     return sr.uuid
   },
 }
+
+export default decorateObject(methods, {
+  reattachSr: defer,
+})

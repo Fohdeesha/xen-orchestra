@@ -26,7 +26,7 @@ get.params = {
 
 export async function create({ job }) {
   if (!job.userId) {
-    job.userId = this.session.get('user_id')
+    job.userId = this.apiContext.user.id
   }
 
   return (await this.createJob(job)).id
@@ -90,6 +90,7 @@ set.params = {
         },
         optional: true,
       },
+      userId: { type: 'string', optional: true },
     },
   },
 }

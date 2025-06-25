@@ -1,4 +1,5 @@
 import _ from 'intl'
+import BulkIcons from 'bulk-icons'
 import Component from 'base-component'
 import Ellipsis, { EllipsisContainer } from 'ellipsis'
 import Icon from 'icon'
@@ -13,7 +14,7 @@ import { Text, XoSelect } from 'editable'
 import { isEmpty, map } from 'lodash'
 import { addTag, editVm, fetchVmStats, migrateVm, removeTag, startVm, stopVm, subscribeResourceSets } from 'xo'
 import { addSubscriptions, connectStore, formatSizeShort, osFamily } from 'utils'
-import { createFinder, createGetObject, createGetVmDisks, createSelector, createSumBy } from 'selectors'
+import { createFinder, createGetObject, createGetVmDisks, createSelector, createSumBy, isAdmin } from 'selectors'
 
 import MiniStats from './mini-stats'
 import styles from './index.css'
@@ -23,6 +24,7 @@ import styles from './index.css'
 })
 @connectStore(() => ({
   container: createGetObject((_, props) => props.item.$container),
+  isAdmin,
   totalDiskSize: createSumBy(
     createGetVmDisks((_, props) => props.item),
     'size'
@@ -64,8 +66,62 @@ export default class VmItem extends Component {
     (powerState, operations) => (!isEmpty(operations) ? 'Busy' : powerState)
   )
 
+  _getAlerts = createSelector(
+    () => this.props.item,
+    vm => {
+      const alerts = []
+
+      if (vm.vulnerabilities.xsa468 && !vm.tags.includes('HIDE_XSA468')) {
+        const { reason, driver, version } = vm.vulnerabilities.xsa468
+
+        if (reason === 'no-pv-drivers-detected') {
+          alerts.push({
+            level: 'warning',
+            render: (
+              <p>
+                <span>
+                  We cannot detect the version of Windows PV drivers on this VM. You may be running an outdated version.
+                  Check XCP-ng's{' '}
+                  <a href='https://docs.xcp-ng.org/vms/#windows-guest-tools-security' target='_blank' rel='noreferrer'>
+                    Windows Guest Tools Security documentation
+                  </a>{' '}
+                  for more details.
+                </span>
+                <br />
+                <br />
+                Still seeing this message even though you updated PV drivers? Please update your XCP-ng.
+              </p>
+            ),
+          })
+        } else {
+          alerts.push({
+            level: 'danger',
+            render: (
+              <p>
+                <span>
+                  This VM is running a Windows PV driver vulnerable to XSA-468 ({driver} {version}). You must upgrade
+                  your Windows PV drivers now. See{' '}
+                  <a
+                    href='https://docs.xcp-ng.org/vms/#xsa-468-multiple-windows-pv-driver-vulnerabilities'
+                    target='_blank'
+                    rel='noreferrer'
+                  >
+                    XCP-ng's documentation
+                  </a>{' '}
+                  for more details.
+                </span>
+              </p>
+            ),
+          })
+        }
+      }
+
+      return alerts
+    }
+  )
+
   render() {
-    const { item: vm, container, expandAll, selected } = this.props
+    const { item: vm, container, expandAll, isAdmin, selected } = this.props
     const resourceSet = this._getResourceSet()
     const state = this._getVmState()
 
@@ -102,6 +158,8 @@ export default class VmItem extends Component {
                     useLongClick
                   />
                 </Ellipsis>
+                &nbsp;
+                <BulkIcons alerts={this._getAlerts()} />
               </EllipsisContainer>
             </Col>
             <Col mediumSize={4} className='hidden-md-down'>
@@ -189,7 +247,11 @@ export default class VmItem extends Component {
                   {resourceSet && (
                     <span>
                       {_('homeResourceSet', {
-                        resourceSet: <Link to={`self?resourceSet=${resourceSet.id}`}>{resourceSet.name}</Link>,
+                        resourceSet: isAdmin ? (
+                          <Link to={`self?resourceSet=${resourceSet.id}`}>{resourceSet.name}</Link>
+                        ) : (
+                          resourceSet.name
+                        ),
                       })}
                     </span>
                   )}
@@ -204,9 +266,9 @@ export default class VmItem extends Component {
               ))}
             </Col>
             <Col mediumSize={6}>
-              <span style={{ fontSize: '1.4em' }}>
+              <div style={{ fontSize: '1.4em' }}>
                 <HomeTags type='VM' labels={vm.tags} onDelete={this._removeTag} onAdd={this._addTag} />
-              </span>
+              </div>
             </Col>
             <Col mediumSize={6} className={styles.itemExpanded}>
               {this._isRunning && <MiniStats fetch={this._fetchStats} />}

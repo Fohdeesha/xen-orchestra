@@ -48,15 +48,18 @@ const getLogs = (db, args) => {
 
 const deleteLogs = (db, args) =>
   new Promise(resolve => {
-    let count = 1
+    let nDeleted = 0
+    let nRunning = 1
     const cb = () => {
-      if (--count === 0) {
+      if (--nRunning === 0) {
+        console.log(nDeleted.toLocaleString(), 'deleted entries')
         resolve()
       }
     }
 
     const deleteEntry = key => {
-      ++count
+      ++nDeleted
+      ++nRunning
       db.del(key, cb)
     }
 
@@ -285,9 +288,11 @@ execPromise(async function main() {
     const require = (await import('module')).createRequire(import.meta.url)
 
     // eslint-disable-next-line n/no-extraneous-require
-    const { repair } = require(require.resolve('level', {
-      paths: [require.resolve('level-party')],
-    }))
+    const { repair } = require(
+      require.resolve('level', {
+        paths: [require.resolve('level-party')],
+      })
+    )
     await new Promise((resolve, reject) => {
       repair(`${config.datadir}/leveldb`, error => {
         if (error) {

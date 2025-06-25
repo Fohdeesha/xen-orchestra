@@ -122,9 +122,6 @@ export default {
   // Original text: "IPs"
   settingsIpsPage: 'IP Címek',
 
-  // Original text: "Config"
-  settingsConfigPage: 'Beállítás',
-
   // Original text: "About"
   aboutPage: 'Információ',
 
@@ -227,11 +224,11 @@ export default {
   // Original text: "Welcome on Xen Orchestra!"
   homeWelcome: 'Üdvözöljük a Felhőben!',
 
-  // Original text: "Add your XenServer hosts or pools"
-  homeWelcomeText: 'Hozzáadása your XenServer kiszolgálók or pools',
+  // Original text: "Add your XCP-ng hosts or pools"
+  homeWelcomeText: 'Hozzáadása your XCP-ng kiszolgálók or pools',
 
-  // Original text: "Some XenServers have been registered but are not connected"
-  homeConnectServerText: 'Some XenServers have been registered but are not Kapcsolódva',
+  // Original text: "Some XCP-ng hosts have been registered but are not connected"
+  homeConnectServerText: 'Some XCP-ng hosts have been registered but are not connected',
 
   // Original text: "Want some help?"
   homeHelp: 'Segítségre van szüksége?',
@@ -1494,9 +1491,6 @@ export default {
   // Original text: "Invalid parameters"
   configIpErrorTitle: 'Invalid parameters',
 
-  // Original text: "IP address and netmask required"
-  configIpErrorMessage: 'IP cím and netmask required',
-
   // Original text: "Static IP address"
   staticIp: 'Static IP cím',
 
@@ -2490,7 +2484,7 @@ export default {
   // Original text: "To SR:"
   vmImportToSr: 'Adattárolóra:',
 
-  // Original text: "VMs to import"
+  // Original text: "VM{nVms, plural, one {} other {s}} to import"
   vmsToImport: 'Importálandó VPS-el',
 
   // Original text: "Reset"
@@ -2508,8 +2502,8 @@ export default {
   // Original text: "Export starting…"
   startVmExport: 'Exportálás indul…',
 
-  // Original text: "N CPUs"
-  nCpus: 'N CPUs',
+  // Original text: "Number of CPUs"
+  nCpus: undefined,
 
   // Original text: "Memory"
   vmMemory: 'Memória',
@@ -3006,12 +3000,6 @@ export default {
   // Original text: "Xen Orchestra"
   xenOrchestra: 'CLOUDXO',
 
-  // Original text: "Xen Orchestra server"
-  xenOrchestraServer: 'Cloudxo szerver',
-
-  // Original text: "Xen Orchestra web client"
-  xenOrchestraWeb: 'Cloudxo web kliens',
-
   // Original text: "No pro support provided!"
   noProSupport: 'Nincsen pro-szupport!',
 
@@ -3126,8 +3114,8 @@ export default {
   // Original text: "No updater available for Community Edition"
   noUpdaterCommunity: 'No upDate available for Community Edition',
 
-  // Original text: "Please consider subscribe and try it with all features for free during 15 days on {link}."
-  considerSubscribe: 'Please consider subscribe and try it with all features for free during 15 days on {link}.',
+  // Original text: "Please consider subscribe and try it with all features for free during 30 days on {link}."
+  considerSubscribe: 'Please consider subscribe and try it with all features for free during 30 days on {link}.',
 
   // Original text: "Manual update could break your current installation due to dependencies issues, do it with caution"
   noUpdaterWarning:

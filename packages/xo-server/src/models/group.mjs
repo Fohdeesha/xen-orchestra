@@ -1,43 +1,30 @@
 import isEmpty from 'lodash/isEmpty.js'
 
 import Collection from '../collection/redis.mjs'
-import Model from '../model.mjs'
-
-import { forEach } from '../utils.mjs'
 
 import { parseProp } from './utils.mjs'
 
 // ===================================================================
 
-export default class Group extends Model {}
-
-// ===================================================================
-
 export class Groups extends Collection {
-  get Model() {
-    return Group
+  async _beforeAdd({ name }) {
+    if (await this.exists({ name })) {
+      throw new Error(`the group ${name} already exists`)
+    }
   }
 
-  create(name, provider, providerGroupId) {
-    return this.add(new Group({ name, provider, providerGroupId }))
+  _beforeUpdate(group, previous) {
+    if (group.name !== previous.name) {
+      return this._beforeAdd(group)
+    }
   }
 
-  async save(group) {
-    // Serializes.
+  _serialize(group) {
     let tmp
     group.users = isEmpty((tmp = group.users)) ? undefined : JSON.stringify(tmp)
-
-    return /* await */ this.update(group)
   }
 
-  async get(properties) {
-    const groups = await super.get(properties)
-
-    // Deserializes.
-    forEach(groups, group => {
-      group.users = parseProp('group', group, 'users', [])
-    })
-
-    return groups
+  _unserialize(group) {
+    group.users = parseProp('group', group, 'users', [])
   }
 }

@@ -1,9 +1,13 @@
 import asyncMapSettled from '@xen-orchestra/async-map/legacy.js'
+import filter from 'lodash/filter.js'
+import isEmpty from 'lodash/isEmpty.js'
 import some from 'lodash/some.js'
+import throttle from 'lodash/throttle.js'
 
 import ensureArray from '../_ensureArray.mjs'
 import { asInteger } from '../xapi/utils.mjs'
-import { forEach, parseXml } from '../utils.mjs'
+import { destroy as destroyXostor } from './xostor.mjs'
+import { forEach, isSrWritable, parseXml } from '../utils.mjs'
 
 // ===================================================================
 
@@ -26,7 +30,7 @@ set.params = {
 
   name_label: { type: 'string', optional: true },
 
-  name_description: { type: 'string', optional: true },
+  name_description: { type: 'string', minLength: 0, optional: true },
 }
 
 set.resolve = {
@@ -53,6 +57,10 @@ const srIsBackingHa = sr => sr.$pool.ha_enabled && some(sr.$pool.$ha_statefiles,
 // TODO: find a way to call this "delete" and not destroy
 export async function destroy({ sr }) {
   const xapi = this.getXapi(sr)
+  if (sr.SR_type === 'linstor') {
+    await destroyXostor.call(this, { sr })
+    return
+  }
   if (sr.SR_type !== 'xosan') {
     await xapi.destroySr(sr._xapiId)
     return
@@ -123,7 +131,18 @@ disconnectAllPbds.resolve = {
 
 // -------------------------------------------------------------------
 
-export async function createIso({ host, nameLabel, nameDescription, path, type, user, password, srUuid }) {
+export async function createIso({
+  host,
+  nameLabel,
+  nameDescription,
+  path,
+  type,
+  user,
+  password,
+  nfsVersion,
+  nfsOptions,
+  srUuid,
+}) {
   const xapi = this.getXapi(host)
 
   const deviceConfig = {}
@@ -134,6 +153,13 @@ export async function createIso({ host, nameLabel, nameDescription, path, type, 
     deviceConfig.type = 'cifs'
     deviceConfig.username = user
     deviceConfig.cifspassword = password
+  } else if (type === 'nfs') {
+    if (nfsVersion !== undefined) {
+      deviceConfig.nfsversion = nfsVersion
+    }
+    if (nfsOptions !== undefined) {
+      deviceConfig.options = nfsOptions
+    }
   }
 
   deviceConfig.location = path
@@ -149,18 +175,15 @@ export async function createIso({ host, nameLabel, nameDescription, path, type, 
     })
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0', // SR size 0 because ISO
-    nameLabel,
-    nameDescription,
-    'iso', // SR type ISO
-    'iso', // SR content type ISO
-    type !== 'local',
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    content_type: 'iso',
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: type !== 'local',
+    type: 'iso',
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -169,11 +192,13 @@ export async function createIso({ host, nameLabel, nameDescription, path, type, 
 createIso.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   path: { type: 'string' },
   type: { type: 'string' },
   user: { type: 'string', optional: true },
   password: { type: 'string', optional: true },
+  nfsVersion: { type: 'string', optional: true },
+  nfsOptions: { type: 'string', optional: true },
   srUuid: { type: 'string', optional: true },
 }
 
@@ -224,18 +249,14 @@ export async function createNfs({
     })
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0',
-    nameLabel,
-    nameDescription,
-    'nfs', // SR LVM over iSCSI
-    'user', // recommended by Citrix
-    true,
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: true,
+    type: 'nfs', // SR LVM over iSCSI
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -244,7 +265,7 @@ export async function createNfs({
 createNfs.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   server: { type: 'string' },
   serverPath: { type: 'string' },
   nfsVersion: { type: 'string', optional: true },
@@ -256,6 +277,50 @@ createNfs.resolve = {
   host: ['host', 'host', 'administrate'],
 }
 
+export async function createSmb({ host, nameLabel, nameDescription, server, user, password, srUuid }) {
+  const xapi = this.getXapi(host)
+
+  const deviceConfig = {
+    server,
+    username: user,
+    password,
+  }
+
+  if (srUuid !== undefined) {
+    return xapi.reattachSr({
+      uuid: srUuid,
+      nameLabel,
+      nameDescription,
+      type: 'smb',
+      deviceConfig,
+    })
+  }
+
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: true,
+    type: 'smb',
+  })
+
+  return xapi.getField('SR', srRef, 'uuid')
+}
+
+createSmb.params = {
+  host: { type: 'string' },
+  nameLabel: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0, default: '' },
+  server: { type: 'string' },
+  srUuid: { type: 'string', optional: true },
+  user: { type: 'string', optional: true },
+  password: { type: 'string', optional: true },
+}
+
+createSmb.resolve = {
+  host: ['host', 'host', 'administrate'],
+}
 // -------------------------------------------------------------------
 // HBA SR
 
@@ -274,23 +339,19 @@ export async function createHba({ host, nameLabel, nameDescription, scsiId, srUu
       uuid: srUuid,
       nameLabel,
       nameDescription,
-      type: 'hba',
+      type: 'lvmohba', // SR LVM over HBA https://team.vates.fr/vates/pl/wuedob5cj3bfbmbzeyjjpnxpda
       deviceConfig,
     })
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0',
-    nameLabel,
-    nameDescription,
-    'lvmohba', // SR LVM over HBA
-    'user', // recommended by Citrix
-    true,
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: true,
+    type: 'lvmohba', // SR LVM over HBA
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -299,7 +360,7 @@ export async function createHba({ host, nameLabel, nameDescription, scsiId, srUu
 createHba.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   scsiId: { type: 'string' },
   srUuid: { type: 'string', optional: true },
 }
@@ -320,18 +381,14 @@ export async function createLvm({ host, nameLabel, nameDescription, device }) {
     device,
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0',
-    nameLabel,
-    nameDescription,
-    'lvm', // SR LVM
-    'user', // recommended by Citrix
-    false,
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: false,
+    type: 'lvm', // SR LVM
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -340,7 +397,7 @@ export async function createLvm({ host, nameLabel, nameDescription, device }) {
 createLvm.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   device: { type: 'string' },
 }
 
@@ -360,18 +417,14 @@ export async function createExt({ host, nameLabel, nameDescription, device }) {
     device,
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0',
-    nameLabel,
-    nameDescription,
-    'ext', // SR ext
-    'user', // recommended by Citrix
-    false,
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: false,
+    type: 'ext', // SR ext
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -380,7 +433,7 @@ export async function createExt({ host, nameLabel, nameDescription, device }) {
 createExt.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   device: { type: 'string' },
 }
 
@@ -435,19 +488,24 @@ export async function createZfs({ host, nameLabel, nameDescription, location }) 
   const xapi = this.getXapi(host)
   // only XCP-ng >=8.2 support the ZFS SR
   const types = await xapi.call('SR.get_supported_types')
-  return xapi.createSr({
-    hostRef: host._xapiRef,
-    name_label: nameLabel,
-    name_description: nameDescription,
-    type: types.includes('zfs') ? 'zfs' : 'file',
-    device_config: { location },
-  })
+  return await xapi.getField(
+    'SR',
+    await xapi.SR_create({
+      device_config: { location },
+      host: host._xapiRef,
+      name_description: nameDescription,
+      name_label: nameLabel,
+      shared: false,
+      type: types.includes('zfs') ? 'zfs' : 'file',
+    }),
+    'uuid'
+  )
 }
 
 createZfs.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   location: { type: 'string' },
 }
 
@@ -458,10 +516,11 @@ createZfs.resolve = {
 // This function helps to detect all NFS shares (exports) on a NFS server
 // Return a table of exports with their paths and ACLs
 
-export async function probeNfs({ host, server }) {
+export async function probeNfs({ host, nfsVersion, server }) {
   const xapi = this.getXapi(host)
 
   const deviceConfig = {
+    nfsversion: nfsVersion,
     server,
   }
 
@@ -492,6 +551,7 @@ export async function probeNfs({ host, server }) {
 
 probeNfs.params = {
   host: { type: 'string' },
+  nfsVersion: { type: 'string', optional: true },
   server: { type: 'string' },
 }
 
@@ -524,6 +584,7 @@ export async function probeHba({ host }) {
     hbaDevices.push({
       hba: hbaDevice.hba.trim(),
       id: hbaDevice.id.trim(),
+      lun: +hbaDevice.lun.trim(),
       path: hbaDevice.path.trim(),
       scsiId: hbaDevice.SCSIid.trim(),
       serial: hbaDevice.serial.trim(),
@@ -591,18 +652,14 @@ export async function createIscsi({
     })
   }
 
-  const srRef = await xapi.call(
-    'SR.create',
-    host._xapiRef,
-    deviceConfig,
-    '0',
-    nameLabel,
-    nameDescription,
-    'lvmoiscsi', // SR LVM over iSCSI
-    'user', // recommended by Citrix
-    true,
-    {}
-  )
+  const srRef = await xapi.SR_create({
+    device_config: deviceConfig,
+    host: host._xapiRef,
+    name_description: nameDescription,
+    name_label: nameLabel,
+    shared: true,
+    type: 'lvmoiscsi', // SR LVM over iSCSI
+  })
 
   const sr = await xapi.call('SR.get_record', srRef)
   return sr.uuid
@@ -611,7 +668,7 @@ export async function createIscsi({
 createIscsi.params = {
   host: { type: 'string' },
   nameLabel: { type: 'string' },
-  nameDescription: { type: 'string' },
+  nameDescription: { type: 'string', minLength: 0 },
   target: { type: 'string' },
   port: { type: 'integer', optional: true },
   targetIqn: { type: 'string' },
@@ -666,7 +723,7 @@ export async function probeIscsiIqns({ host, target: targetIp, port, chapUser, c
 
   const targets = []
   forEach(ensureArray(xml['iscsi-target-iqns'].TGT), target => {
-    // if the target is on another IP adress, do not display it
+    // if the target is on another IP address, do not display it
     if (target.IPAddress.trim() === targetIp) {
       targets.push({
         iqn: target.TargetIQN.trim(),
@@ -731,7 +788,7 @@ export async function probeIscsiLuns({ host, target: targetIp, port, targetIqn, 
     luns.push({
       id: lun.LUNid.trim(),
       vendor: lun.vendor.trim(),
-      serial: lun.serial.trim(),
+      serial: lun.serial?.trim() || '',
       size: lun.size?.trim(),
       scsiId: lun.SCSIid.trim(),
     })
@@ -832,10 +889,11 @@ probeHbaExists.resolve = {
 // This function helps to detect if this NFS SR already exists in XAPI
 // It returns a table of SR UUID, empty if no existing connections
 
-export async function probeNfsExists({ host, server, serverPath }) {
+export async function probeNfsExists({ host, nfsVersion, server, serverPath }) {
   const xapi = this.getXapi(host)
 
   const deviceConfig = {
+    nfsversion: nfsVersion,
     server,
     serverpath: serverPath,
   }
@@ -854,6 +912,7 @@ export async function probeNfsExists({ host, server, serverPath }) {
 
 probeNfsExists.params = {
   host: { type: 'string' },
+  nfsVersion: { type: 'string', optional: true },
   server: { type: 'string' },
   serverPath: { type: 'string' },
 }
@@ -864,15 +923,38 @@ probeNfsExists.resolve = {
 
 // -------------------------------------------------------------------
 
-export function getUnhealthyVdiChainsLength({ sr }) {
-  return this.getXapi(sr).getUnhealthyVdiChainsLength(sr)
+export const getAllUnhealthyVdiChainsLength = throttle(
+  function getAllUnhealthyVdiChainsLength() {
+    const unhealthyVdiChainsLengthBySr = {}
+    filter(this.objects.all, obj => obj.type === 'SR' && isSrWritable(obj)).forEach(sr => {
+      const unhealthyVdiChainsLengthByVdi = this.getXapi(sr).getVdiChainsInfo(sr)
+      if (!isEmpty(unhealthyVdiChainsLengthByVdi)) {
+        unhealthyVdiChainsLengthBySr[sr.uuid] = unhealthyVdiChainsLengthByVdi
+      }
+    })
+    return unhealthyVdiChainsLengthBySr
+  },
+  60e3,
+  { leading: true, trailing: false }
+)
+
+// remove lodash's method which will be refused by XO's addApiMethod()
+delete getAllUnhealthyVdiChainsLength.cancel
+delete getAllUnhealthyVdiChainsLength.flush
+
+getAllUnhealthyVdiChainsLength.permission = 'admin'
+
+// -------------------------------------------------------------------
+
+export function getVdiChainsInfo({ sr }) {
+  return this.getXapi(sr).getVdiChainsInfo(sr)
 }
 
-getUnhealthyVdiChainsLength.params = {
+getVdiChainsInfo.params = {
   id: { type: 'string' },
 }
 
-getUnhealthyVdiChainsLength.resolve = {
+getVdiChainsInfo.resolve = {
   sr: ['id', 'SR', 'operate'],
 }
 
@@ -894,4 +976,55 @@ stats.params = {
 
 stats.resolve = {
   sr: ['id', 'SR', 'view'],
+}
+
+// -------------------------------------------------------------------
+
+export function enableMaintenanceMode({ sr, vmsToShutdown }) {
+  return this.getXapiObject(sr).$enableMaintenanceMode({ vmsToShutdown })
+}
+
+enableMaintenanceMode.description = 'switch the SR into maintenance mode'
+
+enableMaintenanceMode.params = {
+  id: { type: 'string' },
+  vmsToShutdown: { type: 'array', items: { type: 'string' }, optional: true },
+}
+
+enableMaintenanceMode.permission = 'admin'
+
+enableMaintenanceMode.resolve = {
+  sr: ['id', 'SR', 'operate'],
+}
+
+export function disableMaintenanceMode({ sr }) {
+  return this.getXapiObject(sr).$disableMaintenanceMode()
+}
+
+disableMaintenanceMode.description = 'disable the maintenance of the SR'
+
+disableMaintenanceMode.params = {
+  id: { type: 'string' },
+}
+
+disableMaintenanceMode.permission = 'admin'
+
+disableMaintenanceMode.resolve = {
+  sr: ['id', 'SR', 'operate'],
+}
+
+// -------------------------------------------------------------------
+
+export async function reclaimSpace({ sr }) {
+  await this.getXapiObject(sr).$reclaimSpace()
+}
+
+reclaimSpace.description = 'reclaim freed space on SR'
+
+reclaimSpace.params = {
+  id: { type: 'string' },
+}
+
+reclaimSpace.resolve = {
+  sr: ['id', 'SR', 'operate'],
 }

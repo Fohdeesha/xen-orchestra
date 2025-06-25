@@ -10,15 +10,18 @@
 
 Installation of the [npm package](https://npmjs.org/package/@vates/read-chunk):
 
-```
-> npm install --save @vates/read-chunk
+```sh
+npm install --save @vates/read-chunk
 ```
 
 ## Usage
 
+### `readChunk(stream, [size])`
+
 - returns the next available chunk of data
 - like `stream.read()`, a number of bytes can be specified
-- returns `null` if the stream has ended
+- returns with less data than expected if stream has ended
+- returns `null` if the stream has ended and no data has been read
 
 ```js
 import { readChunk } from '@vates/read-chunk'
@@ -28,6 +31,38 @@ import { readChunk } from '@vates/read-chunk'
     // do something with chunk
   }
 })()
+```
+
+### `readChunkStrict(stream, [size])`
+
+Similar behavior to `readChunk` but throws if the stream ended before the requested data could be read.
+
+```js
+import { readChunkStrict } from '@vates/read-chunk'
+
+const chunk = await readChunkStrict(stream, 1024)
+```
+
+### `skip(stream, size)`
+
+Skips a given number of bytes from a stream.
+
+Returns the number of bytes actually skipped, which may be less than the requested size if the stream has ended.
+
+```js
+import { skip } from '@vates/read-chunk'
+
+const bytesSkipped = await skip(stream, 2 * 1024 * 1024 * 1024)
+```
+
+### `skipStrict(stream, size)`
+
+Skips a given number of bytes from a stream and throws if the stream ended before enough stream has been skipped.
+
+```js
+import { skipStrict } from '@vates/read-chunk'
+
+await skipStrict(stream, 2 * 1024 * 1024 * 1024)
 ```
 
 ## Contributions

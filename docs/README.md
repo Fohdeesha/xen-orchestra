@@ -1,17 +1,41 @@
-# Xen Orchestra
+# Website
 
-## Introduction
+This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
 
-Welcome to the official Xen Orchestra (XO) documentation.
+### Installation
 
-XO is a web interface to visualize and administer your XenServer (or XAPI enabled) hosts. **No agent** is required for it to work.
+```
+$ yarn
+```
 
-It aims to be easy to use on any device supporting modern web technologies (HTML 5, CSS 3, JavaScript), such as your desktop computer or your smartphone.
+### Local Development
 
-## Quick start
+```
+$ yarn start
+```
 
-Log in to your account and use the deploy form available on [Xen Orchestra website](https://xen-orchestra.com/#!/xoa).
+This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
 
-More details available on the [installation section](installation.md#xoa).
+### Build
 
-![Xen Orchestra logo](./assets/logo.png)
+```
+$ yarn build
+```
+
+This command generates static content into the `build` directory and can be served using any static contents hosting service.
+
+### Deployment
+
+Using SSH:
+
+```
+$ USE_SSH=true yarn deploy
+```
+
+Not using SSH:
+
+```
+$ GIT_USER=<Your GitHub username> yarn deploy
+```
+
+If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.

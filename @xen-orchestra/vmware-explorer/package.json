@@ -1,0 +1,34 @@
+{
+  "license": "ISC",
+  "private": false,
+  "version": "0.9.5",
+  "name": "@xen-orchestra/vmware-explorer",
+  "dependencies": {
+    "@vates/node-vsphere-soap": "^2.1.2",
+    "@vates/read-chunk": "^1.2.0",
+    "@vates/task": "^0.6.2",
+    "@xen-orchestra/log": "^0.7.1",
+    "lodash": "^4.17.21",
+    "undici": "^7.8.0",
+    "vhd-lib": "^4.13.0",
+    "xml2js": "^0.6.2",
+    "xo-vmdk-to-vhd": "^2.5.8"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "homepage": "https://github.com/vatesfr/xen-orchestra/tree/master/@xen-orchestra/vmware-explorer",
+  "bugs": "https://github.com/vatesfr/xen-orchestra/issues",
+  "repository": {
+    "directory": "@xen-orchestra/vmware-explorer",
+    "type": "git",
+    "url": "https://github.com/vatesfr/xen-orchestra.git"
+  },
+  "author": {
+    "name": "Vates SAS",
+    "url": "https://vates.fr"
+  },
+  "scripts": {
+    "postversion": "npm publish --access public"
+  }
+}

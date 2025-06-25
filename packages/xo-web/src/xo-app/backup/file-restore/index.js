@@ -1,14 +1,12 @@
 import _ from 'intl'
 import ActionButton from 'action-button'
 import Component from 'base-component'
-import Icon from 'icon'
 import React from 'react'
 import SortedTable from 'sorted-table'
 import Upgrade from 'xoa-upgrade'
-import { addSubscriptions, noop } from 'utils'
+import { addSubscriptions, noop, NumericDate } from 'utils'
 import { confirm } from 'modal'
 import { error } from 'notification'
-import { FormattedDate } from 'react-intl'
 import { deleteBackups, fetchFiles, listVmBackups, subscribeBackupNgJobs, subscribeRemotes } from 'xo'
 import { filter, find, flatMap, forEach, keyBy, map, orderBy, reduce, toArray } from 'lodash'
 
@@ -30,33 +28,13 @@ const BACKUPS_COLUMNS = [
   },
   {
     name: _('firstBackupColumn'),
-    itemRenderer: ({ first }) => (
-      <FormattedDate
-        value={new Date(first.timestamp)}
-        month='long'
-        day='numeric'
-        year='numeric'
-        hour='2-digit'
-        minute='2-digit'
-        second='2-digit'
-      />
-    ),
+    itemRenderer: ({ first }) => <NumericDate timestamp={first.timestamp} />,
     sortCriteria: 'first.timestamp',
     sortOrder: 'desc',
   },
   {
     name: _('lastBackupColumn'),
-    itemRenderer: ({ last }) => (
-      <FormattedDate
-        value={new Date(last.timestamp)}
-        month='long'
-        day='numeric'
-        year='numeric'
-        hour='2-digit'
-        minute='2-digit'
-        second='2-digit'
-      />
-    ),
+    itemRenderer: ({ last }) => <NumericDate timestamp={last.timestamp} />,
     sortCriteria: 'last.timestamp',
     default: true,
     sortOrder: 'desc',
@@ -87,7 +65,7 @@ export default class Restore extends Component {
 
   _refreshBackupList = async (_remotes = this.props.remotes, jobs = this.props.jobs) => {
     const remotes = keyBy(
-      filter(_remotes, remote => remote.enabled && remote.supportFileRestore),
+      filter(_remotes, remote => remote.enabled),
       'id'
     )
     const backupsByRemote = await listVmBackups(toArray(remotes))
@@ -143,11 +121,11 @@ export default class Restore extends Component {
     confirm({
       title: _('restoreFilesFromBackup', { name: last.vm.name_label }),
       body: <RestoreFileModalBody vmName={last.vm.name_label} backups={backups} />,
-    }).then(({ remote, disk, partition, paths }) => {
+    }).then(({ remote, disk, format, partition, paths }) => {
       if (remote === undefined || disk === undefined || paths.length === 0) {
         return error(_('restoreFiles'), _('restoreFilesError'))
       }
-      return fetchFiles(remote, disk, partition, paths)
+      return fetchFiles(remote, disk, partition, paths, format)
     }, noop)
 
   _delete = data =>
@@ -204,9 +182,6 @@ export default class Restore extends Component {
               {_('refreshBackupList')}
             </ActionButton>
           </div>
-          <em>
-            <Icon icon='info' /> {_('restoreDeltaBackupsInfo')}
-          </em>
           <SortedTable
             actions={this._actions}
             collection={this.state.backupDataByVm}

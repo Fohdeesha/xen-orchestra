@@ -3,8 +3,11 @@ import { createPredicate } from 'value-matcher'
 import { ignoreErrors } from 'promise-toolbox'
 import { invalidCredentials, noSuchObject } from 'xo-common/api-errors.js'
 import { parseDuration } from '@vates/parse-duration'
+import { verifyTotp } from '@vates/otp'
+import Obfuscate from '@vates/obfuscate'
 
-import Token, { Tokens } from '../models/token.mjs'
+import patch from '../patch.mjs'
+import { Tokens } from '../models/token.mjs'
 import { forEach, generateToken } from '../utils.mjs'
 
 // ===================================================================
@@ -28,13 +31,6 @@ export default class {
     // attacks).
     this._failures = { __proto__: null }
 
-    // Creates persistent collections.
-    const tokensDb = (this._tokens = new Tokens({
-      connection: app._redis,
-      prefix: 'xo:token',
-      indexes: ['user_id'],
-    }))
-
     // Password authentication provider.
     this.registerAuthenticationProvider(async ({ username, password }, { ip } = {}) => {
       if (username === undefined || password === undefined) {
@@ -54,18 +50,34 @@ export default class {
     })
 
     // Token authentication provider.
-    this.registerAuthenticationProvider(async ({ token: tokenId }) => {
+    this.registerAuthenticationProvider(async ({ token: tokenId }, { ip } = {}) => {
       if (!tokenId) {
         return
       }
 
       try {
         const token = await app.getAuthenticationToken(tokenId)
-        return { expiration: token.expiration, userId: token.user_id }
+
+        let { last_uses = {} } = token
+        last_uses[ip] = { timestamp: Date.now() }
+
+        const MAX_LAST_USE_ENTRIES = 10
+        if (Object.keys(last_uses).length > MAX_LAST_USE_ENTRIES) {
+          const entries = Object.entries(last_uses).sort((a, b) => b[1].timestamp - a[1].timestamp)
+          entries.length = MAX_LAST_USE_ENTRIES
+          last_uses = Object.fromEntries(entries)
+        }
+
+        token.last_uses = last_uses
+
+        this._tokens.update(token)
+
+        return { bypassOtp: true, expiration: token.expiration, userId: token.user_id }
       } catch (error) {}
     })
 
     app.hooks.on('clean', async () => {
+      const tokensDb = this._tokens
       const tokens = await tokensDb.get()
       const toRemove = []
       const now = Date.now()
@@ -78,7 +90,14 @@ export default class {
       return tokensDb.rebuildIndexes()
     })
 
-    app.hooks.on('start', () => {
+    app.hooks.on('core started', () => {
+      // Creates persistent collections.
+      const tokensDb = (this._tokens = new Tokens({
+        connection: app._redis,
+        namespace: 'token',
+        indexes: ['client_id', 'user_id'],
+      }))
+
       app.addConfigManager(
         'authTokens',
         () => tokensDb.get(),
@@ -104,8 +123,6 @@ export default class {
         //   - `userId`
         //   - optionally `expiration` to indicate when the session is no longer
         //     valid
-        // - an object with a property `username` containing the name
-        //   of the authenticated user
         const result = await provider(credentials, userData)
 
         // No match.
@@ -113,12 +130,11 @@ export default class {
           continue
         }
 
-        const { userId, username, expiration } = result
+        // replace userId by user
+        result.user = await this._app.getUser(result.userId)
+        delete result.userId
 
-        return {
-          user: await (userId !== undefined ? this._app.getUser(userId) : this._app.registerUser(undefined, username)),
-          expiration,
-        }
+        return result
       } catch (error) {
         // DEPRECATED: Authentication providers may just throw `null`
         // to indicate they could not authenticate the user without
@@ -128,89 +144,178 @@ export default class {
     }
   }
 
-  async authenticateUser(credentials, userData) {
-    // don't even attempt to authenticate with empty password
-    const { password } = credentials
-    if (password === '') {
-      throw new Error('empty password')
-    }
+  async authenticateUser(credentials, userData, { bypassOtp = false } = {}) {
+    const { tasks } = this._app
+    const task = await tasks.create(
+      {
+        type: 'xo:authentication:authenticateUser',
+        name: 'XO user authentication',
+        credentials: Obfuscate.replace(credentials, '* obfuscated *'),
+        userData,
+      },
+      {
+        // only keep trace of failed attempts
+        clearLogOnSuccess: true,
+      }
+    )
 
-    // TODO: remove when email has been replaced by username.
-    if (credentials.email) {
-      credentials.username = credentials.email
-    } else if (credentials.username) {
-      credentials.email = credentials.username
-    }
+    return task.run(async () => {
+      // don't even attempt to authenticate with empty password
+      const { password } = credentials
+      if (password === '') {
+        throw new Error('empty password')
+      }
 
-    const failures = this._failures
+      // TODO: remove when email has been replaced by username.
+      if (credentials.email) {
+        credentials.username = credentials.email
+      } else if (credentials.username) {
+        credentials.email = credentials.username
+      }
 
-    const { username } = credentials
-    const now = Date.now()
-    let lastFailure
-    if (username && (lastFailure = failures[username]) && lastFailure + this._throttlingDelay > now) {
-      throw new Error('too fast authentication tries')
-    }
+      const failures = this._failures
 
-    const result = await this._authenticateUser(credentials, userData)
-    if (result === undefined) {
+      const { username } = credentials
+      const now = Date.now()
+      let lastFailure
+      if (username && (lastFailure = failures[username]) && lastFailure + this._throttlingDelay > now) {
+        throw new Error('too fast authentication tries')
+      }
+
+      const { otp, ...rest } = credentials
+      const result = await this._authenticateUser(rest, userData)
+      if (result !== undefined) {
+        const secret = result.user.preferences?.otp
+        if (
+          secret === undefined ||
+          bypassOtp ||
+          result.bypassOtp || // some authentication providers bypass OTP (e.g. token)
+          (await verifyTotp(otp, { secret }))
+        ) {
+          delete failures[username]
+          return result
+        }
+      }
+
       failures[username] = now
       throw invalidCredentials()
-    }
-
-    delete failures[username]
-    return result
+    })
   }
 
   // -----------------------------------------------------------------
 
-  async createAuthenticationToken({ expiresIn, userId }) {
-    const token = new Token({
+  async createAuthenticationToken({ client, description, expiresIn, userId }) {
+    let duration = this._defaultTokenValidity
+    if (expiresIn !== undefined) {
+      duration = parseDuration(expiresIn)
+      if (duration < 60e3) {
+        throw new Error('invalid expiresIn duration: ' + expiresIn)
+      } else if (duration > this._maxTokenValidity) {
+        throw new Error('too high expiresIn duration: ' + expiresIn)
+      }
+    }
+
+    const tokens = this._tokens
+    const now = Date.now()
+
+    const clientId = client?.id
+    if (clientId !== undefined) {
+      const token = await tokens.first({ client_id: clientId, user_id: userId })
+      if (token !== undefined) {
+        if (token.expiration > now) {
+          token.description = description
+          token.expiration = now + duration
+          tokens.update(token)::ignoreErrors()
+
+          return token
+        }
+
+        tokens.remove(token.id)::ignoreErrors()
+      }
+    }
+
+    const token = {
+      client,
+      created_at: now,
+      description,
       id: await generateToken(),
       user_id: userId,
-      expiration:
-        Date.now() +
-        Math.min(
-          expiresIn !== undefined ? parseDuration(expiresIn) : this._defaultTokenValidity,
-          this._maxTokenValidity
-        ),
-    })
+      expiration: now + duration,
+    }
 
     await this._tokens.add(token)
 
-    // TODO: use plain properties directly.
-    return token.properties
+    return token
   }
 
   async deleteAuthenticationToken(id) {
-    if (!(await this._tokens.remove(id))) {
+    let predicate
+    const { apiContext } = this._app
+    if (apiContext === undefined || apiContext.permission === 'admin') {
+      predicate = id
+    } else {
+      predicate = { id, user_id: apiContext.user.id }
+    }
+
+    if (!(await this._tokens.remove(predicate))) {
       throw noSuchAuthenticationToken(id)
     }
   }
 
   async deleteAuthenticationTokens({ filter }) {
-    return Promise.all(
-      (await this._tokens.get()).filter(createPredicate(filter)).map(({ id }) => this.deleteAuthenticationToken(id))
-    )
+    const db = this._tokens
+    await db.remove((await db.get()).filter(createPredicate(filter)).map(({ id }) => id))
   }
 
-  async getAuthenticationToken(id) {
-    let token = await this._tokens.first(id)
+  async _getAuthenticationToken(id, properties) {
+    const token = await this._tokens.first(properties ?? id)
+    if (token !== undefined) {
+      if (token.expiration > Date.now()) {
+        return token
+      }
+
+      this._tokens.remove(id)::ignoreErrors()
+    }
+  }
+
+  async getAuthenticationToken(properties) {
+    const id = typeof properties === 'string' ? properties : properties.id
+
+    const token = await this._getAuthenticationToken(id, properties)
     if (token === undefined) {
       throw noSuchAuthenticationToken(id)
     }
-
-    token = token.properties
-
-    if (!(token.expiration > Date.now())) {
-      this._tokens.remove(id)::ignoreErrors()
-
-      throw noSuchAuthenticationToken(id)
-    }
-
     return token
   }
 
   async getAuthenticationTokensForUser(userId) {
-    return this._tokens.get({ user_id: userId })
+    const tokens = []
+
+    const now = Date.now()
+    const tokensDb = this._tokens
+    const toRemove = []
+    for (const token of await tokensDb.get({ user_id: userId })) {
+      const { expiration } = token
+      if (expiration < now) {
+        toRemove.push(token.id)
+      } else {
+        tokens.push(token)
+      }
+    }
+    tokensDb.remove(toRemove).catch(log.warn)
+
+    return tokens
+  }
+
+  async isValidAuthenticationToken(id) {
+    const token = await this._getAuthenticationToken(id)
+    return token !== undefined && (await this._app.doesUserExist(token.user_id))
+  }
+
+  async updateAuthenticationToken(properties, { description }) {
+    const token = await this.getAuthenticationToken(properties)
+    patch(token, { description })
+    await this._tokens.update(token)
+    return token
   }
 }
