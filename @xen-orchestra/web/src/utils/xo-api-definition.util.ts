@@ -2,6 +2,8 @@ import type { ApiDefinition } from '@/types/xo'
 import type { XoDashboard } from '@/types/xo/dashboard.type'
 import type { XoHost } from '@/types/xo/host.type'
 import type { XoNetwork } from '@/types/xo/network.type'
+import type { XoPci } from '@/types/xo/pci.type'
+import type { XoPgpu } from '@/types/xo/pgpu.type'
 import type { XoPif } from '@/types/xo/pif.type'
 import type { XoPool } from '@/types/xo/pool.type'
 import type { XoServer } from '@/types/xo/server.type'
@@ -104,18 +106,33 @@ export const xoApiDefinition = {
     handler: (record: XoVmTemplate) => record,
     stream: false,
   },
-  server: {
-    type: 'collection',
-    path: 'servers',
-    fields: 'id,host,httpProxy,username,readOnly,allowUnauthorized,label,poolId',
-    handler: (record: XoServer) => record,
-    stream: false,
-  },
   'vm-controller': {
     type: 'collection',
     path: 'vm-controllers',
     fields: 'id,memory',
     handler: (record: XoVmController) => record,
+    stream: false,
+  },
+  server: {
+    type: 'collection',
+    path: 'servers',
+    fields:
+      'host,httpProxy,username,readOnly,allowUnauthorized,label,poolId,poolNameLabel,id,status,master,error,poolNameDescription',
+    handler: (record: XoServer) => record,
+    stream: false,
+  },
+  pci: {
+    type: 'collection',
+    path: 'pcis',
+    fields: 'id,device_name',
+    handler: (record: XoPci) => record,
+    stream: false,
+  },
+  pgpu: {
+    type: 'collection',
+    path: 'pgpus',
+    fields: 'id,pci',
+    handler: (record: XoPgpu) => record,
     stream: false,
   },
 } satisfies ApiDefinition

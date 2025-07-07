@@ -12,7 +12,7 @@
 </template>
 
 <script lang="ts" setup>
-import { RRD_STEP_FROM_STRING, type VmStats } from '@/libs/xapi-stats.ts'
+import { RRD_STEP_FROM_STRING } from '@/libs/xapi-stats.ts'
 import type { LinearChartData } from '@core/types/chart.ts'
 import VtsErrorNoDataHero from '@core/components/state-hero/VtsErrorNoDataHero.vue'
 import VtsLoadingHero from '@core/components/state-hero/VtsLoadingHero.vue'
@@ -20,12 +20,13 @@ import VtsNoDataHero from '@core/components/state-hero/VtsNoDataHero.vue'
 import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import { formatSizeRaw } from '@core/utils/size.util.ts'
+import type { XapiVmStatsRaw } from '@vates/types/common'
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { data } = defineProps<{
   data: {
-    stats: VmStats | undefined
+    stats: XapiVmStatsRaw | undefined
     timestampStart: number
   }
   loading: boolean
@@ -45,10 +46,9 @@ const ramUsage = computed<LinearChartData>(() => {
     return []
   }
 
-  const result = ramTotal.map((total, index) => ({
-    timestamp:
-      (timestampStart - RRD_STEP_FROM_STRING.hours * (ramTotal.length - 1) + index * RRD_STEP_FROM_STRING.hours) * 1000,
-    value: total - memoryFree[index],
+  const result = ramTotal.map((total, hourIndex) => ({
+    timestamp: (timestampStart + hourIndex * RRD_STEP_FROM_STRING.hours) * 1000,
+    value: (total ?? NaN) - (memoryFree[hourIndex] ?? NaN),
   }))
 
   return [
@@ -64,7 +64,7 @@ const maxValue = computed(() => {
     return 1024 * 1024 * 1024 // 1 GB as fallback
   }
 
-  return Math.max(...data.stats.memory, 0)
+  return Math.max(...data.stats.memory.map(memoryValue => memoryValue || 0), 0)
 })
 
 const byteFormatter = (value: number | null) => {
@@ -72,8 +72,8 @@ const byteFormatter = (value: number | null) => {
     return ''
   }
 
-  const result = formatSizeRaw(value, 1)
+  const size = formatSizeRaw(value, 1)
 
-  return `${result?.value} ${result?.prefix}`
+  return `${size.value} ${size.prefix}`
 }
 </script>

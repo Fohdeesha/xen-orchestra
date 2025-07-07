@@ -12,7 +12,7 @@
 </template>
 
 <script lang="ts" setup>
-import { RRD_STEP_FROM_STRING, type VmStats } from '@/libs/xapi-stats.ts'
+import { RRD_STEP_FROM_STRING } from '@/libs/xapi-stats.ts'
 import type { LinearChartData } from '@core/types/chart.ts'
 import VtsErrorNoDataHero from '@core/components/state-hero/VtsErrorNoDataHero.vue'
 import VtsLoadingHero from '@core/components/state-hero/VtsLoadingHero.vue'
@@ -20,12 +20,13 @@ import VtsNoDataHero from '@core/components/state-hero/VtsNoDataHero.vue'
 import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import { formatSizeRaw } from '@core/utils/size.util.ts'
+import type { XapiVmStatsRaw } from '@vates/types/common'
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { data } = defineProps<{
   data: {
-    stats: VmStats | undefined
+    stats: XapiVmStatsRaw | undefined
     timestampStart: number
   }
   loading: boolean
@@ -46,7 +47,7 @@ const vdiUsage = computed((): LinearChartData => {
   }
 
   const addVdiData = (type: 'r' | 'w') => {
-    const xvdsArrays = Object.values(xvds[type])
+    const xvdsArrays = Object.values(xvds[type] ?? {})
 
     if (xvdsArrays.length === 0) {
       return {
@@ -55,12 +56,10 @@ const vdiUsage = computed((): LinearChartData => {
       }
     }
 
-    const data = Array.from({ length: xvdsArrays[0].length }, (_, idx) => {
-      const timestamp =
-        (timestampStart - RRD_STEP_FROM_STRING.hours * (xvdsArrays[0].length - 1) + idx * RRD_STEP_FROM_STRING.hours) *
-        1000
+    const data = Array.from({ length: xvdsArrays[0].length }, (_, hourIndex) => {
+      const timestamp = (timestampStart + hourIndex * RRD_STEP_FROM_STRING.hours) * 1000
 
-      const value = xvdsArrays.reduce((sum, arr) => sum + (arr[idx] ?? 0), 0)
+      const value = xvdsArrays.reduce((sum, arr) => sum + (arr[hourIndex] ?? NaN), 0)
 
       return {
         timestamp,
@@ -80,7 +79,7 @@ const vdiUsage = computed((): LinearChartData => {
 
 const maxValue = computed(() => {
   const values = vdiUsage.value.reduce(
-    (acc, series) => [...acc, ...series.data.map(item => item.value ?? 0)],
+    (acc, series) => [...acc, ...series.data.map(item => item.value || 0)],
     [] as number[]
   )
 
@@ -98,8 +97,8 @@ const byteFormatter = (value: number | null) => {
     return ''
   }
 
-  const result = formatSizeRaw(value, 1)
+  const size = formatSizeRaw(value, 1)
 
-  return `${result?.value} ${result?.prefix}`
+  return `${size.value} ${size.prefix}`
 }
 </script>

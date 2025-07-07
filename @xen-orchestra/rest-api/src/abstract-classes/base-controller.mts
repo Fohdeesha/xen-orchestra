@@ -1,8 +1,11 @@
 import { Controller, HttpStatusCodeLiteral } from 'tsoa'
-import { Readable } from 'node:stream'
+import { createGzip } from 'node:zlib'
+import { pipeline } from 'node:stream/promises'
+import { Readable, type Transform } from 'node:stream'
 import { Request } from 'express'
 import type { Task } from '@vates/types/lib/vates/task'
-import { XoRecord } from '@vates/types/xo'
+import type { XapiXoRecord, XoRecord } from '@vates/types/xo'
+import type { Xapi } from '@vates/types/lib/xen-orchestra/xapi'
 
 import { BASE_URL } from '../index.mjs'
 import { makeNdJsonStream } from '../helpers/stream.helper.mjs'
@@ -75,5 +78,35 @@ export abstract class BaseController<T extends XoRecord, IsSync extends boolean>
 
       return location
     }
+  }
+
+  getXapi(maybeId: XapiXoRecord | XapiXoRecord['id']): Xapi {
+    return this.restApi.xoApp.getXapi(maybeId)
+  }
+
+  maybeCompressResponse(req: Request, res: ExResponse): Transform | ExResponse {
+    let transform: Transform | undefined
+
+    let acceptEncoding = req.headers['accept-encoding']
+    acceptEncoding = Array.isArray(acceptEncoding) ? acceptEncoding : acceptEncoding?.split(',')
+    if (
+      acceptEncoding !== undefined &&
+      acceptEncoding.some(encoding => {
+        const value = encoding.split(';')[0].trim().toLowerCase()
+        // support `x-gzip` as an alias for `gzip`
+        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Encoding#gzip
+        return value === 'gzip' || value === 'x-gzip'
+      })
+    ) {
+      res.setHeader('Content-Encoding', 'gzip')
+      transform = createGzip()
+    }
+
+    if (transform !== undefined) {
+      pipeline(transform, res).catch(noop)
+      return transform
+    }
+
+    return res
   }
 }
